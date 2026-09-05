@@ -1,14 +1,15 @@
-function generate_splits()
-%GENERATE_SPLITS Generate train, validation, and test splits.
+function splitsStruct = generate_splits()
+%GENERATE_SPLITS Generate stratified train, validation, and test splits.
 %   GENERATE_SPLITS() creates stratified 70/15/15 splits based on the
-%   dr_grade column in master_manifest_validated.csv. It saves the splits as
-%   a .mat file and updates the split column in the CSV.
+%   dr_grade column in master_manifest_validated.csv. It works in base
+%   MATLAB without requiring the Statistics and Machine Learning Toolbox.
+%   It saves the splits as splits.mat and updates master_manifest_validated.csv.
 %
 %   Example:
 %       generate_splits()
 
     try
-        fprintf('Generating data splits...\n');
+        fprintf('=== Generating Stratified Data Splits (70/15/15) ===\n');
         
         % Dynamic project root resolution
         projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
@@ -19,49 +20,88 @@ function generate_splits()
         
         manifestPath = fullfile(manifestDir, 'master_manifest_validated.csv');
         if ~exist(manifestPath, 'file')
-            error('DRPipeline:data:missingValidatedManifest', 'Validated manifest not found. Run validate_data first.');
+            error('DRPipeline:data:missingValidatedManifest', ...
+                'Validated manifest not found at %s. Run validate_data first.', manifestPath);
         end
         
         manifest = readtable(manifestPath, 'TextType', 'string');
         
-        % Filter only valid images
-        validIdx = find(manifest.is_valid);
+        % Filter only valid images (if is_valid column exists)
+        if ismember('is_valid', manifest.Properties.VariableNames)
+            validIdx = find(manifest.is_valid);
+        else
+            validIdx = (1:height(manifest))';
+        end
+        
+        if isempty(validIdx)
+            error('DRPipeline:data:noValidImages', ...
+                'No valid images found in %s. Check validate_data output.', manifestPath);
+        end
+        
         validManifest = manifest(validIdx, :);
+        nValid = height(validManifest);
         
-        % Stratified split 70/15/15
-        % Using cvpartition on the valid subset
-        cv1 = cvpartition(validManifest.dr_grade, 'HoldOut', 0.3);
-        idxTrain = training(cv1);
-        idxRest = test(cv1);
+        % Initialize split assignments for valid items
+        splitAssignment = strings(nValid, 1);
         
-        restLabels = validManifest.dr_grade(idxRest);
-        cv2 = cvpartition(restLabels, 'HoldOut', 0.5);
-        idxValRest = training(cv2);
-        idxTestRest = test(cv2);
+        % Reproducible random seed
+        rng(42, 'twister');
         
-        % Map back to valid subset indices
-        restIndices = find(idxRest);
-        idxVal = false(size(idxTrain));
-        idxVal(restIndices(idxValRest)) = true;
+        % Handle grades: group by unique grade (including NaN)
+        grades = validManifest.dr_grade;
+        nanMask = isnan(grades);
+        uniqueGrades = unique(grades(~nanMask));
         
-        idxTest = false(size(idxTrain));
-        idxTest(restIndices(idxTestRest)) = true;
+        trainCount = 0; valCount = 0; testCount = 0;
         
-        % Update split column
-        splitsStruct = struct('train', [], 'val', [], 'test', []);
-        
-        for i = 1:length(validIdx)
-            origIdx = validIdx(i);
-            imgId = validManifest.image_id(i);
+        % Stratified split by class
+        for g = uniqueGrades'
+            classIdx = find(grades == g);
+            nClass = numel(classIdx);
             
-            if idxTrain(i)
-                manifest.split(origIdx) = "train";
+            % Randomly permute class indices
+            perm = classIdx(randperm(nClass));
+            
+            nTr = round(0.70 * nClass);
+            nVal = round(0.15 * nClass);
+            % Remaining go to test
+            
+            trIdx = perm(1:nTr);
+            vIdx = perm(nTr+1 : min(nTr+nVal, nClass));
+            teIdx = perm(min(nTr+nVal+1, nClass+1) : end);
+            
+            splitAssignment(trIdx) = "train";
+            splitAssignment(vIdx) = "val";
+            splitAssignment(teIdx) = "test";
+        end
+        
+        % Handle any unannotated (NaN) images
+        if any(nanMask)
+            nanIdx = find(nanMask);
+            nNan = numel(nanIdx);
+            perm = nanIdx(randperm(nNan));
+            nTr = round(0.70 * nNan);
+            nVal = round(0.15 * nNan);
+            
+            splitAssignment(perm(1:nTr)) = "train";
+            splitAssignment(perm(nTr+1 : min(nTr+nVal, nNan))) = "val";
+            splitAssignment(perm(min(nTr+nVal+1, nNan+1) : end)) = "test";
+        end
+        
+        % Update manifest table
+        splitsStruct = struct('train', string([]), 'val', string([]), 'test', string([]));
+        
+        for i = 1:nValid
+            origIdx = validIdx(i);
+            assigned = splitAssignment(i);
+            manifest.split(origIdx) = assigned;
+            
+            imgId = string(validManifest.image_id(i));
+            if assigned == "train"
                 splitsStruct.train = [splitsStruct.train; imgId];
-            elseif idxVal(i)
-                manifest.split(origIdx) = "val";
+            elseif assigned == "val"
                 splitsStruct.val = [splitsStruct.val; imgId];
-            elseif idxTest(i)
-                manifest.split(origIdx) = "test";
+            elseif assigned == "test"
                 splitsStruct.test = [splitsStruct.test; imgId];
             end
         end
@@ -69,17 +109,24 @@ function generate_splits()
         % Save splits struct
         splitsPath = fullfile(manifestDir, 'splits.mat');
         save(splitsPath, '-struct', 'splitsStruct');
-        fprintf('Splits structure saved to %s\n', splitsPath);
+        fprintf('  Splits structure saved to: %s\n', splitsPath);
         
         % Save updated manifest
         writetable(manifest, manifestPath);
-        fprintf('Updated manifest with splits saved to %s\n', manifestPath);
+        fprintf('  Updated manifest saved to: %s\n', manifestPath);
         
-        % Print statistics
-        fprintf('\nSplit Statistics:\n');
-        fprintf('Train: %d\n', length(splitsStruct.train));
-        fprintf('Val: %d\n', length(splitsStruct.val));
-        fprintf('Test: %d\n', length(splitsStruct.test));
+        % Print summary table
+        fprintf('\n╔══════════════════════════════════════════════════════╗\n');
+        fprintf('║                 SPLIT SUMMARY                        ║\n');
+        fprintf('╠══════════════════════════════════════════════════════╣\n');
+        fprintf('║  Train images    : %-6d (%5.1f%%)                   ║\n', ...
+            numel(splitsStruct.train), numel(splitsStruct.train)/nValid*100);
+        fprintf('║  Validation      : %-6d (%5.1f%%)                   ║\n', ...
+            numel(splitsStruct.val), numel(splitsStruct.val)/nValid*100);
+        fprintf('║  Test images     : %-6d (%5.1f%%)                   ║\n', ...
+            numel(splitsStruct.test), numel(splitsStruct.test)/nValid*100);
+        fprintf('║  Total valid     : %-6d                            ║\n', nValid);
+        fprintf('╚══════════════════════════════════════════════════════╝\n\n');
         
     catch ME
         error('DRPipeline:data:splitGenerationFailed', 'Failed to generate splits: %s', ME.message);
