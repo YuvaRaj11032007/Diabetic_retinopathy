@@ -156,9 +156,9 @@ function segResult = runAllSegmentation(img, modelsInput)
     tNeo = tic;
     try
         if isfield(options.models, 'neovascularization')
-            neoRes = detectNeovascularization(img, odMask, vesselMask, 'model', options.models.neovascularization);
+            neoRes = detectNeovascularization(img, vesselMask, segResult.opticDisc, 'model', options.models.neovascularization);
         else
-            neoRes = detectNeovascularization(img, odMask, vesselMask);
+            neoRes = detectNeovascularization(img, vesselMask, segResult.opticDisc);
         end
         segResult.neovascularization = neoRes;
     catch ME

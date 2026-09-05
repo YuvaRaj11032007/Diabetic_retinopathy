@@ -181,8 +181,8 @@ function result = runDRScreening(imagePath, options)
 
     % Clinical features from segmentation
     try
-        foveaLoc = [];
-        if isfield(segResult, 'fovea') && isfield(segResult.fovea, 'center')
+        foveaLoc = [round(size(img, 2)/2), round(size(img, 1)/2)];
+        if isfield(segResult, 'fovea') && isfield(segResult.fovea, 'center') && ~isempty(segResult.fovea.center) && numel(segResult.fovea.center) == 2
             foveaLoc = segResult.fovea.center;
         end
         clinicalFeats = aggregateFeatures(segResult, foveaLoc);

@@ -22,16 +22,61 @@ function nvResult = detectNeovascularization(img, vesselMask, odResult)
 
     arguments
         img (:,:,3) {mustBeNumeric}
-        vesselMask (:,:) logical
-        odResult (1,1) struct
+        arg2 = []
+        arg3 = []
     end
 
     try
         [H, W, ~] = size(img);
         
-        % Get vessel skeleton and branch points
-        skel = bwskel(vesselMask);
-        branchPoints = bwmorph(skel, 'branchpoints');
+        % Normalize arg2 and arg3: which one is vesselMask and which is odResult
+        if isstruct(arg2)
+            odResult = arg2;
+            vesselMask = arg3;
+        else
+            vesselMask = arg2;
+            odResult = arg3;
+        end
+        
+        % Defaults
+        if isempty(vesselMask) || ~islogical(vesselMask) || ~isequal(size(vesselMask), [H, W])
+            vesselMask = false(H, W);
+        end
+        
+        if isempty(odResult) || ~isstruct(odResult)
+            odResult = struct('center', [round(W/2), round(H/2)], 'centroid', [round(W/2), round(H/2)], 'radius', round(min(H,W)/10));
+        end
+        if ~isfield(odResult, 'centroid')
+            if isfield(odResult, 'center')
+                odResult.centroid = odResult.center;
+            else
+                odResult.centroid = [round(W/2), round(H/2)];
+            end
+        end
+        if ~isfield(odResult, 'radius') || isempty(odResult.radius) || odResult.radius <= 0
+            odResult.radius = round(min(H,W)/10);
+        end
+        
+        % Get vessel skeleton and branch points with fallbacks
+        if any(vesselMask(:)) && exist('bwskel', 'file') == 2
+            try
+                skel = bwskel(vesselMask);
+            catch
+                skel = vesselMask;
+            end
+        else
+            skel = vesselMask;
+        end
+        
+        if any(skel(:)) && exist('bwmorph', 'file') == 2
+            try
+                branchPoints = bwmorph(skel, 'branchpoints');
+            catch
+                branchPoints = false(H, W);
+            end
+        else
+            branchPoints = false(H, W);
+        end
         
         % Define patch parameters
         patchSize = 128;

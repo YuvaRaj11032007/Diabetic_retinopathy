@@ -23,7 +23,7 @@ function featuresStruct = aggregateFeatures(segResult, foveaLocation)
 
     arguments
         segResult (1,1) struct
-        foveaLocation (1,2) double {mustBeReal, mustBeFinite}
+        foveaLocation double = []
     end
     
     % Initialize default values for features
