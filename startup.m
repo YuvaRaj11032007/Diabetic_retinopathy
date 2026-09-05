@@ -36,10 +36,16 @@ srcDirs = {
     fullfile(projectRoot, 'tests')
 };
 
-% Add each directory to path
+% Add each directory to path (create if missing)
 addedCount = 0;
 for i = 1:numel(srcDirs)
     dirPath = srcDirs{i};
+    if exist(dirPath, 'dir') ~= 7
+        try
+            mkdir(dirPath);
+        catch
+        end
+    end
     if exist(dirPath, 'dir') == 7
         addpath(dirPath);
         addedCount = addedCount + 1;
