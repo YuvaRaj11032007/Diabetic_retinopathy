@@ -23,7 +23,11 @@ function [mask, circleParams] = createCircularROI(imgOrSize, centerAndRadius)
 
     arguments
         imgOrSize 
-        centerAndRadius (1,3) double = []
+        centerAndRadius double = []
+    end
+    
+    if ~isempty(centerAndRadius) && numel(centerAndRadius) ~= 3
+        error('DRPipeline:utils:InvalidCircleParams', 'centerAndRadius must be [cx, cy, radius].');
     end
     
     isImage = ~isvector(imgOrSize) || (isvector(imgOrSize) && length(imgOrSize) > 3);

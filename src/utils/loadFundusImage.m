@@ -21,8 +21,16 @@ function [img, metadata] = loadFundusImage(imagePath, targetSize)
 %   See also IMREAD, IMRESIZE.
 
     arguments
-        imagePath (1,1) string {mustBeFile}
-        targetSize (1,2) double {mustBePositive, mustBeInteger} = []
+        imagePath
+        targetSize double = []
+    end
+
+    imagePath = char(imagePath);
+    if ~isfile(imagePath)
+        error('DRPipeline:utils:FileNotFound', 'File does not exist: %s', imagePath);
+    end
+    if ~isempty(targetSize) && numel(targetSize) ~= 2
+        error('DRPipeline:utils:InvalidTargetSize', 'targetSize must be a 1x2 vector [rows, cols].');
     end
 
     try
