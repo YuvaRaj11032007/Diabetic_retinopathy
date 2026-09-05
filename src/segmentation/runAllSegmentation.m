@@ -30,8 +30,18 @@ function segResult = runAllSegmentation(img, options)
 
     arguments
         img (:,:,3) uint8 {mustBeNonempty}
-        options.models struct = struct()
+        modelsInput = struct()
     end
+
+    % Normalize models input
+    if isstruct(modelsInput) && isfield(modelsInput, 'models')
+        models = modelsInput.models;
+    elseif isstruct(modelsInput)
+        models = modelsInput;
+    else
+        models = struct();
+    end
+    options.models = models;
 
     % Initialize output struct
     segResult = struct();

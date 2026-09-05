@@ -48,7 +48,8 @@ function fusedResult = fuseFeatures(clinicalFeatures, deepFeatures, options)
     fusedResult.featureStd = [];
     fusedResult.nComponentsRetained = size(concatFeatures, 2);
     
-    if options.UsePCA
+    % PCA requires at least 2 samples to fit
+    if options.UsePCA && size(concatFeatures, 1) > 1
         % Calculate Mean
         mu = mean(concatFeatures, 1);
         fusedResult.featureMean = mu;
@@ -58,27 +59,40 @@ function fusedResult = fuseFeatures(clinicalFeatures, deepFeatures, options)
             sigma = std(concatFeatures, 0, 1);
             sigma(sigma == 0) = 1; % Prevent division by zero
             fusedResult.featureStd = sigma;
-            
             centeredData = (concatFeatures - mu) ./ sigma;
         else
             centeredData = concatFeatures - mu;
         end
         
-        % Apply PCA
-        % Use 'Economy' mode to handle N < D cases efficiently
-        [coeff, score, latent, ~, explained] = pca(centeredData, 'Algorithm', 'svd', 'Economy', true);
-        
-        % Determine number of components to retain explained variance
-        cumulativeVar = cumsum(explained) / 100; % pca returns percentages
-        nComponents = find(cumulativeVar >= options.ExplainedVariance, 1);
-        
-        if isempty(nComponents)
-            nComponents = length(cumulativeVar);
+        % Apply PCA (using pca if available, else native SVD)
+        if exist('pca', 'file') == 2
+            [coeff, score, ~, ~, explained] = pca(centeredData, 'Algorithm', 'svd', 'Economy', true);
+            cumulativeVar = cumsum(explained) / 100;
+            nComponents = find(cumulativeVar >= options.ExplainedVariance, 1);
+            if isempty(nComponents), nComponents = length(cumulativeVar); end
+            
+            fusedResult.fusedMatrix = score(:, 1:nComponents);
+            fusedResult.pcaCoeffs = coeff(:, 1:nComponents);
+            fusedResult.nComponentsRetained = nComponents;
+        else
+            % Native SVD fallback (no toolbox required)
+            [~, S, V] = svd(centeredData, 'econ');
+            singularVals = diag(S);
+            explained = (singularVals.^2) / sum(singularVals.^2);
+            cumulativeVar = cumsum(explained);
+            nComponents = find(cumulativeVar >= options.ExplainedVariance, 1);
+            if isempty(nComponents), nComponents = length(cumulativeVar); end
+            
+            coeff = V;
+            score = centeredData * V;
+            fusedResult.fusedMatrix = score(:, 1:nComponents);
+            fusedResult.pcaCoeffs = coeff(:, 1:nComponents);
+            fusedResult.nComponentsRetained = nComponents;
         end
-        
-        % Prepare outputs
-        fusedResult.fusedMatrix = score(:, 1:nComponents);
-        fusedResult.pcaCoeffs = coeff(:, 1:nComponents);
-        fusedResult.nComponentsRetained = nComponents;
+    else
+        % N = 1 or UsePCA = false: retain concatenated feature vector directly
+        fusedResult.fusedMatrix = concatFeatures;
+        fusedResult.pcaCoeffs = [];
+        fusedResult.nComponentsRetained = size(concatFeatures, 2);
     end
 end

@@ -44,8 +44,16 @@ function features = extractQualityFeatures(img, mask)
     if isempty(mask)
         grayImg = rgb2gray(img);
         mask = grayImg > 15;  % Simple threshold to find fundus region
-        mask = imfill(mask, 'holes');
-        mask = bwareaopen(mask, round(numel(grayImg) * 0.01));
+        try
+            mask = imfill(mask, 'holes');
+        catch
+            se = strel('disk', 15);
+            mask = imclose(mask, se);
+        end
+        try
+            mask = bwareaopen(mask, round(numel(grayImg) * 0.01));
+        catch
+        end
         % Morphological smoothing
         se = strel('disk', 15);
         mask = imclose(mask, se);

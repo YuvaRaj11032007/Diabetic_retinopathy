@@ -70,7 +70,12 @@ function corrected = normalizeIllumination(img, sigma)
     % Stretch each channel to use full dynamic range within the fundus mask
     grayImg = rgb2gray(im2uint8(correctedD));
     fundMask = grayImg > 10;
-    fundMask = imfill(fundMask, 'holes');
+    try
+        fundMask = imfill(fundMask, 'holes');
+    catch
+        se = strel('disk', 15);
+        fundMask = imclose(fundMask, se);
+    end
 
     for ch = 1:3
         channel = correctedD(:,:,ch);

@@ -153,7 +153,11 @@ function result = runDRScreening(imagePath, options)
     stepTimer = tic;
 
     try
-        segResult = runAllSegmentation(enhancedImg, options.SegModels);
+        if ~isempty(options.SegModels)
+            segResult = runAllSegmentation(enhancedImg, options.SegModels);
+        else
+            segResult = runAllSegmentation(enhancedImg);
+        end
     catch ME
         warning('DRPipeline:pipeline:segFailed', ...
             'Segmentation failed: %s. Using empty results.', ME.message);
@@ -396,26 +400,34 @@ function grade = ruleBasedGrading(segResult)
 
     % Check for microaneurysms
     maCount = 0;
-    if isfield(segResult, 'microaneurysms') && isfield(segResult.microaneurysms, 'count')
-        maCount = segResult.microaneurysms.count;
+    if isfield(segResult, 'microaneurysms') && ~isempty(segResult.microaneurysms) && isfield(segResult.microaneurysms, 'count')
+        try, maCount = segResult.microaneurysms(1).count; catch, end
+    elseif isfield(segResult, 'MACount')
+        try, maCount = segResult.MACount; catch, end
     end
 
     % Check for hemorrhages
     heCount = 0;
-    if isfield(segResult, 'hemorrhages') && isfield(segResult.hemorrhages, 'count')
-        heCount = segResult.hemorrhages.count;
+    if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages) && isfield(segResult.hemorrhages, 'count')
+        try, heCount = segResult.hemorrhages(1).count; catch, end
+    elseif isfield(segResult, 'HemorrhageCount')
+        try, heCount = segResult.HemorrhageCount; catch, end
     end
 
     % Check for exudates
     exPresent = false;
-    if isfield(segResult, 'exudates') && isfield(segResult.exudates, 'totalArea')
-        exPresent = segResult.exudates.totalArea > 0;
+    if isfield(segResult, 'exudates') && ~isempty(segResult.exudates) && isfield(segResult.exudates, 'totalArea')
+        try, exPresent = segResult.exudates(1).totalArea > 0; catch, end
+    elseif isfield(segResult, 'HardExudateArea')
+        try, exPresent = segResult.HardExudateArea > 0; catch, end
     end
 
     % Check for neovascularization
     nvProb = 0;
-    if isfield(segResult, 'neovascularization') && isfield(segResult.neovascularization, 'nvProbability')
-        nvProb = segResult.neovascularization.nvProbability;
+    if isfield(segResult, 'neovascularization') && ~isempty(segResult.neovascularization) && isfield(segResult.neovascularization, 'nvProbability')
+        try, nvProb = segResult.neovascularization(1).nvProbability; catch, end
+    elseif isfield(segResult, 'NVDProbability')
+        try, nvProb = segResult.NVDProbability; catch, end
     end
 
     % Apply ICDR rules
@@ -479,7 +491,14 @@ function segResult = createEmptySegResult()
     segResult.vesselMask = [];
     segResult.microaneurysms = struct('centroids', [], 'count', 0, 'binaryMask', []);
     segResult.exudates = struct('hardExudateMask', [], 'softExudateMask', [], 'totalArea', 0);
-    segResult.hemorrhages = struct('binaryMask', [], 'count', 0, 'types', {});
+    
+    % Use scalar struct assignment to avoid 0x0 empty struct array from {}
+    h = struct();
+    h.binaryMask = [];
+    h.count = 0;
+    h.types = {};
+    segResult.hemorrhages = h;
+    
     segResult.neovascularization = struct('nvProbability', 0, 'nvdFlag', false, 'nveRegions', []);
     segResult.processingTime = struct();
 end

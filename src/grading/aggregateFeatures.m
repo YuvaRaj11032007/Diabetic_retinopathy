@@ -43,43 +43,59 @@ function featuresStruct = aggregateFeatures(segResult, foveaLocation)
     feat.vesselBranchPoints = 0;
     
     % 1. MA Count
-    if isfield(segResult, 'MACount')
+    if isfield(segResult, 'microaneurysms') && ~isempty(segResult.microaneurysms) && isfield(segResult.microaneurysms, 'count')
+        feat.maCount = segResult.microaneurysms.count;
+    elseif isfield(segResult, 'MACount')
         feat.maCount = segResult.MACount;
-    else
-        warning('DRPipeline:aggregateFeatures:MissingField', 'MACount missing in segResult.');
     end
     
     % 2. MA Density
+    fundusArea = 1;
     if isfield(segResult, 'FundusArea') && segResult.FundusArea > 0
-        feat.maDensity = feat.maCount / segResult.FundusArea;
-    elseif isfield(segResult, 'FundusArea')
-        warning('DRPipeline:aggregateFeatures:InvalidArea', 'FundusArea is 0 or missing.');
+        fundusArea = segResult.FundusArea;
+    elseif isfield(segResult, 'vesselMask') && ~isempty(segResult.vesselMask)
+        fundusArea = numel(segResult.vesselMask);
     end
+    feat.maDensity = feat.maCount / fundusArea;
     
     % 3. Hard Exudate Area
-    if isfield(segResult, 'HardExudateArea')
+    if isfield(segResult, 'exudates') && ~isempty(segResult.exudates) && isfield(segResult.exudates, 'totalArea')
+        feat.hardExudateArea = segResult.exudates.totalArea;
+    elseif isfield(segResult, 'HardExudateArea')
         feat.hardExudateArea = segResult.HardExudateArea;
     end
     
     % 4. Hard exudate distance to fovea
-    if isfield(segResult, 'HardExudatesMask') && any(segResult.HardExudatesMask(:))
-        [r, c] = find(segResult.HardExudatesMask);
+    exMask = [];
+    if isfield(segResult, 'exudates') && ~isempty(segResult.exudates) && isfield(segResult.exudates, 'hardExudateMask')
+        exMask = segResult.exudates.hardExudateMask;
+    elseif isfield(segResult, 'HardExudatesMask')
+        exMask = segResult.HardExudatesMask;
+    end
+    if ~isempty(exMask) && any(exMask(:)) && ~isempty(foveaLocation)
+        [r, c] = find(exMask);
         distances = sqrt((c - foveaLocation(1)).^2 + (r - foveaLocation(2)).^2);
         feat.hardExudateDistFovea = min(distances);
     end
     
     % 5. Soft exudate count
-    if isfield(segResult, 'SoftExudateCount')
+    if isfield(segResult, 'exudates') && ~isempty(segResult.exudates) && isfield(segResult.exudates, 'softExudateMask') && ~isempty(segResult.exudates.softExudateMask)
+        feat.softExudateCount = max(0, sum(segResult.exudates.softExudateMask(:) > 0));
+    elseif isfield(segResult, 'SoftExudateCount')
         feat.softExudateCount = segResult.SoftExudateCount;
     end
     
     % 6. Hemorrhage count
-    if isfield(segResult, 'HemorrhageCount')
+    if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages) && isfield(segResult.hemorrhages, 'count')
+        feat.hemorrhageCount = segResult.hemorrhages.count;
+    elseif isfield(segResult, 'HemorrhageCount')
         feat.hemorrhageCount = segResult.HemorrhageCount;
     end
     
     % 7. Hemorrhage area
-    if isfield(segResult, 'HemorrhageArea')
+    if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages) && isfield(segResult.hemorrhages, 'binaryMask') && ~isempty(segResult.hemorrhages.binaryMask)
+        feat.hemorrhageArea = sum(segResult.hemorrhages.binaryMask(:) > 0);
+    elseif isfield(segResult, 'HemorrhageArea')
         feat.hemorrhageArea = segResult.HemorrhageArea;
     end
     
@@ -94,17 +110,23 @@ function featuresStruct = aggregateFeatures(segResult, foveaLocation)
     end
     
     % 10. Neovascularization probability
-    if isfield(segResult, 'NVDProbability')
+    if isfield(segResult, 'neovascularization') && ~isempty(segResult.neovascularization) && isfield(segResult.neovascularization, 'nvProbability')
+        feat.nvdProbability = segResult.neovascularization.nvProbability;
+    elseif isfield(segResult, 'NVDProbability')
         feat.nvdProbability = segResult.NVDProbability;
     end
     
     % 11. NVD flag
-    if isfield(segResult, 'NVDFlag')
+    if isfield(segResult, 'neovascularization') && ~isempty(segResult.neovascularization) && isfield(segResult.neovascularization, 'nvdFlag')
+        feat.nvdFlag = double(segResult.neovascularization.nvdFlag);
+    elseif isfield(segResult, 'NVDFlag')
         feat.nvdFlag = segResult.NVDFlag;
     end
     
     % 12. Vessel density
-    if isfield(segResult, 'VesselDensity')
+    if isfield(segResult, 'vessels') && ~isempty(segResult.vessels) && isfield(segResult.vessels, 'vesselDensity')
+        feat.vesselDensity = segResult.vessels.vesselDensity;
+    elseif isfield(segResult, 'VesselDensity')
         feat.vesselDensity = segResult.VesselDensity;
     end
     
