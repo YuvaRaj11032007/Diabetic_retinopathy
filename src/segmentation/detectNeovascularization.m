@@ -22,20 +22,18 @@ function nvResult = detectNeovascularization(img, vesselMask, odResult)
 
     arguments
         img (:,:,3) {mustBeNumeric}
-        arg2 = []
-        arg3 = []
+        vesselMask = []
+        odResult = []
     end
 
     try
         [H, W, ~] = size(img);
         
-        % Normalize arg2 and arg3: which one is vesselMask and which is odResult
-        if isstruct(arg2)
-            odResult = arg2;
-            vesselMask = arg3;
-        else
-            vesselMask = arg2;
-            odResult = arg3;
+        % Normalize in case caller swapped vesselMask and odResult
+        if isstruct(vesselMask) && ~isstruct(odResult)
+            temp = vesselMask;
+            vesselMask = odResult;
+            odResult = temp;
         end
         
         % Defaults
