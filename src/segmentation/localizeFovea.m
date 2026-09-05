@@ -1,4 +1,4 @@
-function foveaResult = localizeFovea(imgRGB, odResult)
+function foveaResult = localizeFovea(imgRGB, odResult, odRadiusInput)
 %LOCALIZEFOVEA Localize the fovea center using anatomical priors
 %
 %   foveaResult = localizeFovea(imgRGB, odResult) localizes the fovea 
