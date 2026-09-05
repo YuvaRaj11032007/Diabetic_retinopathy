@@ -127,7 +127,11 @@ function vesselResult = segmentVessels(imgRGB, options)
         
         strong = probMap > highThresh;
         weak = (probMap > lowThresh) & (probMap <= highThresh);
-        binaryMask = bwselect(strong | weak, find(strong), 8);
+        try
+            binaryMask = imreconstruct(strong, strong | weak);
+        catch
+            binaryMask = strong | weak;
+        end
         
         % f. Post-process
         binaryMask = bwareaopen(binaryMask, 50); 

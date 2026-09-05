@@ -24,8 +24,8 @@ function exudateResult = segmentExudates(img, odMask, vesselMask)
 
     arguments
         img (:,:,3) {mustBeNumeric}
-        odMask (:,:) logical
-        vesselMask (:,:) logical
+        odMask = []
+        vesselMask = []
     end
 
     try
@@ -33,6 +33,13 @@ function exudateResult = segmentExudates(img, odMask, vesselMask)
             imgDouble = im2double(img);
         else
             imgDouble = img;
+        end
+        [H, W, ~] = size(imgDouble);
+        if isempty(odMask) || ~islogical(odMask) || ~isequal(size(odMask), [H, W])
+            odMask = false(H, W);
+        end
+        if isempty(vesselMask) || ~islogical(vesselMask) || ~isequal(size(vesselMask), [H, W])
+            vesselMask = false(H, W);
         end
         
         % Generate fundus mask (simple threshold to exclude dark background)

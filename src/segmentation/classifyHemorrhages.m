@@ -21,7 +21,7 @@ function hemorrhageResult = classifyHemorrhages(img, vesselMask)
 
     arguments
         img (:,:,3) {mustBeNumeric}
-        vesselMask (:,:) logical
+        vesselMask = []
     end
 
     try
@@ -29,6 +29,10 @@ function hemorrhageResult = classifyHemorrhages(img, vesselMask)
             imgDouble = im2double(img);
         else
             imgDouble = img;
+        end
+        [H, W, ~] = size(imgDouble);
+        if isempty(vesselMask) || ~islogical(vesselMask) || ~isequal(size(vesselMask), [H, W])
+            vesselMask = false(H, W);
         end
         
         % 1. Extract green channel and invert

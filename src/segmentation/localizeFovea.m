@@ -25,18 +25,30 @@ function foveaResult = localizeFovea(imgRGB, odResult)
 
     arguments
         imgRGB (:,:,3) uint8
-        odResult (1,1) struct
+        odResult
+        odRadiusInput = []
     end
     
-    if ~isfield(odResult, 'center') || ~isfield(odResult, 'radius')
-        error('DRPipeline:segmentation:localizeFovea:InvalidOD', ...
-            'odResult must contain center and radius fields.');
+    if isstruct(odResult)
+        if ~isfield(odResult, 'center')
+            error('DRPipeline:segmentation:localizeFovea:InvalidOD', 'odResult must contain center field.');
+        end
+        odCenter = odResult.center;
+        if isfield(odResult, 'radius') && ~isempty(odResult.radius)
+            odRadius = odResult.radius;
+        else
+            odRadius = round(min(size(imgRGB, 1), size(imgRGB, 2)) / 10);
+        end
+    else
+        odCenter = odResult;
+        if ~isempty(odRadiusInput)
+            odRadius = odRadiusInput;
+        else
+            odRadius = round(min(size(imgRGB, 1), size(imgRGB, 2)) / 10);
+        end
     end
 
     [H, W, ~] = size(imgRGB);
-    
-    odCenter = odResult.center;
-    odRadius = odResult.radius;
     
     % a. Determine laterality (left/right eye) from OD position
     if odCenter(1) < W/2

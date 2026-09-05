@@ -29,13 +29,17 @@ function maResult = detectMicroaneurysms(img, vesselMask, options)
 
     arguments
         img (:,:,3) {mustBeNumeric}
-        vesselMask (:,:) logical
+        vesselMask = []
         options.minDiameter (1,1) double {mustBePositive} = 3
         options.maxDiameter (1,1) double {mustBePositive} = 40
         options.threshold (1,1) double {mustBePositive} = 0.05
     end
 
     try
+        [H, W, ~] = size(img);
+        if isempty(vesselMask) || ~islogical(vesselMask) || ~isequal(size(vesselMask), [H, W])
+            vesselMask = false(H, W);
+        end
         % 1. Extract green channel and invert (MAs are dark)
         if isinteger(img)
             imgDouble = im2double(img);

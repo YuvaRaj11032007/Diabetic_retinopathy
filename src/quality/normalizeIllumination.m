@@ -33,7 +33,7 @@ function corrected = normalizeIllumination(img, sigma)
 
     arguments
         img (:,:,3) uint8
-        sigma (1,1) double {mustBePositive} = 0
+        sigma (1,1) double {mustBeNonnegative} = 0
     end
 
     % Default sigma: 1/6 of image width (captures large-scale illumination)

@@ -94,10 +94,9 @@ function segResult = runAllSegmentation(img, modelsInput)
     %% 3. Fovea Localization (depends on OD)
     tFov = tic;
     try
-        if ~isempty(odCenter) && ~isempty(odRadius)
-            fovRes = localizeFovea(img, odCenter, odRadius);
+        if ~isempty(segResult.opticDisc) && isfield(segResult.opticDisc, 'center') && ~isempty(segResult.opticDisc.center)
+            fovRes = localizeFovea(img, segResult.opticDisc);
         else
-            % Cannot run properly without OD, attempt fallback or error
             error('Optic disc information missing.');
         end
         segResult.fovea = fovRes;
