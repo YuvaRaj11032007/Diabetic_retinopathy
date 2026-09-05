@@ -149,17 +149,22 @@ function model = runTraining(imageDir, labelsTable, options)
         height(subTable), numel(categories(labels)));
     
     % Datastores: use 'split' column if present
-    if ismember('split', subTable.Properties.VariableNames) && any(subTable.split == "train")
-        trainMask = subTable.split == "train";
-        valMask   = subTable.split == "val";
-        if ~any(valMask)
-            % Fallback if val split empty
-            [imdsTrain, imdsVal] = splitEachLabel(imageDatastore(resolvedPaths, 'Labels', labels), 0.8, 'randomized');
-        else
-            imdsTrain = imageDatastore(resolvedPaths(trainMask), 'Labels', labels(trainMask));
-            imdsVal   = imageDatastore(resolvedPaths(valMask),   'Labels', labels(valMask));
+    hasSplit = false;
+    if ismember('split', subTable.Properties.VariableNames)
+        splitCol = string(subTable.split);
+        if any(splitCol == "train")
+            hasSplit = true;
+            trainMask = (splitCol == "train");
+            valMask   = (splitCol == "val");
+            if any(valMask)
+                imdsTrain = imageDatastore(resolvedPaths(trainMask), 'Labels', labels(trainMask));
+                imdsVal   = imageDatastore(resolvedPaths(valMask),   'Labels', labels(valMask));
+            else
+                [imdsTrain, imdsVal] = splitEachLabel(imageDatastore(resolvedPaths, 'Labels', labels), 0.8, 'randomized');
+            end
         end
-    else
+    end
+    if ~hasSplit
         imds = imageDatastore(resolvedPaths, 'Labels', labels);
         [imdsTrain, imdsVal] = splitEachLabel(imds, 0.8, 'randomized');
     end
