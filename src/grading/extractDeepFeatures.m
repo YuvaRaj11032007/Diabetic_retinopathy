@@ -67,31 +67,100 @@ function model = runTraining(imageDir, labelsTable, options)
     % Validate inputs
     validateattributes(imageDir, {'char', 'string'}, {'scalartext'}, 'extractDeepFeatures', 'imageDir');
     validateattributes(labelsTable, {'table'}, {'nonempty'}, 'extractDeepFeatures', 'labelsTable');
-    if ~ismember('FileName', labelsTable.Properties.VariableNames) || ...
-       ~ismember('Label', labelsTable.Properties.VariableNames)
+    
+    vars = labelsTable.Properties.VariableNames;
+    
+    % Find file path column (flexible)
+    fileCol = '';
+    for v = {'filepath', 'FilePath', 'FileName', 'filename', 'image_id', 'id_code'}
+        if ismember(v{1}, vars)
+            fileCol = v{1};
+            break;
+        end
+    end
+    if isempty(fileCol)
         error('DRPipeline:extractDeepFeatures:InvalidTable', ...
-            'labelsTable must contain ''FileName'' and ''Label'' columns.');
+            'labelsTable must contain ''filepath'', ''FileName'', or ''image_id'' column.');
     end
     
-    % Ensure labels are categorical
-    if ~iscategorical(labelsTable.Label)
-        labelsTable.Label = categorical(labelsTable.Label);
+    % Find label column (flexible)
+    labelCol = '';
+    for v = {'dr_grade', 'Label', 'label', 'diagnosis', 'level'}
+        if ismember(v{1}, vars)
+            labelCol = v{1};
+            break;
+        end
     end
-    numClasses = numel(categories(labelsTable.Label));
+    if isempty(labelCol)
+        error('DRPipeline:extractDeepFeatures:InvalidTable', ...
+            'labelsTable must contain ''dr_grade'' or ''Label'' column.');
+    end
     
-    % Create image datastore
-    filePaths = fullfile(string(imageDir), string(labelsTable.FileName));
-    imds = imageDatastore(filePaths, 'Labels', labelsTable.Label);
+    % Filter out unannotated (NaN) images
+    validMask = ~isnan(double(labelsTable.(labelCol)));
+    subTable = labelsTable(validMask, :);
     
-    % Split into train and validation (80-20 split)
-    [imdsTrain, imdsVal] = splitEachLabel(imds, 0.8, 'randomized');
+    % Resolve file paths on disk
+    rawPaths = string(subTable.(fileCol));
+    resolvedPaths = strings(height(subTable), 1);
+    existsMask = false(height(subTable), 1);
+    
+    for i = 1:height(subTable)
+        p = rawPaths(i);
+        if isfile(p)
+            resolvedPaths(i) = p;
+            existsMask(i) = true;
+        elseif isfile(fullfile(string(imageDir), p))
+            resolvedPaths(i) = fullfile(string(imageDir), p);
+            existsMask(i) = true;
+        elseif isfile(fullfile(string(imageDir), "train_images", p))
+            resolvedPaths(i) = fullfile(string(imageDir), "train_images", p);
+            existsMask(i) = true;
+        elseif isfile(fullfile(string(imageDir), p + ".png"))
+            resolvedPaths(i) = fullfile(string(imageDir), p + ".png");
+            existsMask(i) = true;
+        elseif isfile(fullfile(string(imageDir), "train_images", p + ".png"))
+            resolvedPaths(i) = fullfile(string(imageDir), "train_images", p + ".png");
+            existsMask(i) = true;
+        end
+    end
+    
+    if ~any(existsMask)
+        error('DRPipeline:extractDeepFeatures:ImagesNotFound', ...
+            'None of the images listed in the table could be found in "%s".', imageDir);
+    end
+    
+    subTable = subTable(existsMask, :);
+    resolvedPaths = resolvedPaths(existsMask);
+    labels = categorical(subTable.(labelCol));
+    
+    fprintf('[DeepFeatures] Indexed %d valid training images across %d classes.\n', ...
+        height(subTable), numel(categories(labels)));
+    
+    % Datastores: use 'split' column if present
+    if ismember('split', subTable.Properties.VariableNames) && any(subTable.split == "train")
+        trainMask = subTable.split == "train";
+        valMask   = subTable.split == "val";
+        if ~any(valMask)
+            % Fallback if val split empty
+            [imdsTrain, imdsVal] = splitEachLabel(imageDatastore(resolvedPaths, 'Labels', labels), 0.8, 'randomized');
+        else
+            imdsTrain = imageDatastore(resolvedPaths(trainMask), 'Labels', labels(trainMask));
+            imdsVal   = imageDatastore(resolvedPaths(valMask),   'Labels', labels(valMask));
+        end
+    else
+        imds = imageDatastore(resolvedPaths, 'Labels', labels);
+        [imdsTrain, imdsVal] = splitEachLabel(imds, 0.8, 'randomized');
+    end
+    
+    numClasses = numel(categories(labels));
     
     % Load Pretrained ResNet-50
     try
         net = resnet50;
     catch
         error('DRPipeline:extractDeepFeatures:MissingNetwork', ...
-            'ResNet-50 is not installed. Please install Deep Learning Toolbox Model for ResNet-50 Network.');
+            'ResNet-50 is not installed. Please install "Deep Learning Toolbox Model for ResNet-50 Network" from Add-On Explorer.');
     end
     lgraph = layerGraph(net);
     
@@ -105,7 +174,6 @@ function model = runTraining(imageDir, labelsTable, options)
     end
     
     % Replace the final fully-connected layer
-    % In resnet50, the fc layer is named 'fc1000' and classification layer is 'ClassificationLayer_fc1000'
     newFCLayer = fullyConnectedLayer(numClasses, ...
         'Name', 'new_fc', ...
         'WeightLearnRateFactor', 10, ...
@@ -127,14 +195,16 @@ function model = runTraining(imageDir, labelsTable, options)
     augimdsVal = augmentedImageDatastore(imageSize, imdsVal);
     
     % Training Options
-    miniBatchSize = 32;
-    if isfield(options, 'MiniBatchSize')
-        miniBatchSize = options.MiniBatchSize;
-    end
-    maxEpochs = 30;
-    if isfield(options, 'MaxEpochs')
-        maxEpochs = options.MaxEpochs;
-    end
+    miniBatchSize = 16;
+    if isfield(options, 'MiniBatchSize'), miniBatchSize = options.MiniBatchSize; end
+    
+    maxEpochs = 15;
+    if isfield(options, 'MaxEpochs'), maxEpochs = options.MaxEpochs; end
+    
+    valFreq = max(5, floor(numel(imdsTrain.Files) / miniBatchSize));
+    
+    plotsSetting = 'training-progress';
+    if isfield(options, 'Plots'), plotsSetting = options.Plots; end
     
     opts = trainingOptions('sgdm', ...
         'MiniBatchSize', miniBatchSize, ...
@@ -145,10 +215,13 @@ function model = runTraining(imageDir, labelsTable, options)
         'LearnRateDropPeriod', 10, ...
         'L2Regularization', 1e-4, ...
         'ValidationData', augimdsVal, ...
-        'ValidationFrequency', floor(numel(imdsTrain.Files)/miniBatchSize), ...
+        'ValidationFrequency', valFreq, ...
         'ValidationPatience', 5, ...
-        'Plots', 'none', ...
-        'Verbose', false);
+        'Plots', plotsSetting, ...
+        'Verbose', true);
+    
+    fprintf('[DeepFeatures] Starting ResNet-50 fine-tuning on %d images (BatchSize=%d, Epochs=%d)...\n', ...
+        numel(imdsTrain.Files), miniBatchSize, maxEpochs);
     
     % Train the Network
     [trainedNet, trainInfo] = trainNetwork(augimdsTrain, lgraph, opts);
@@ -157,6 +230,17 @@ function model = runTraining(imageDir, labelsTable, options)
     model.network = trainedNet;
     model.trainingInfo = trainInfo;
     model.featureLayerName = 'avg_pool';
+    
+    % Automatically save model to models/grading/backbone_finetuned.mat
+    projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
+    if isempty(projectRoot) || ~exist(projectRoot, 'dir')
+        projectRoot = fileparts(fileparts(mfilename('fullpath')));
+    end
+    modelDir = fullfile(projectRoot, 'models', 'grading');
+    if ~exist(modelDir, 'dir'), mkdir(modelDir); end
+    savePath = fullfile(modelDir, 'backbone_finetuned.mat');
+    save(savePath, '-struct', 'model');
+    fprintf('[DeepFeatures] Model successfully fine-tuned and saved to:\n  %s\n', savePath);
 end
 
 function features = runExtraction(images, model)
