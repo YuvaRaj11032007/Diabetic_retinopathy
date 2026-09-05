@@ -36,11 +36,32 @@ function manifest = create_manifest()
         manifest = table('Size', [0, length(varNames)], 'VariableTypes', varTypes, 'VariableNames', varNames);
         
         % -----------------------------------------------------------------
-        % 1. Process APTOS 2019
+        % 1. Process APTOS 2019 (supports aptos2019, aptos2019-blindness-detection, etc.)
         % -----------------------------------------------------------------
-        aptosDir = fullfile(rawDataDir, 'aptos2019');
-        if exist(aptosDir, 'dir')
-            % Look for train.csv in aptos2019 root or aptos2019/labels
+        aptosCandidateDirs = {
+            fullfile(rawDataDir, 'aptos2019-blindness-detection')
+            fullfile(rawDataDir, 'aptos2019')
+        };
+        aptosDir = '';
+        for d = 1:numel(aptosCandidateDirs)
+            if exist(aptosCandidateDirs{d}, 'dir')
+                aptosDir = aptosCandidateDirs{d};
+                break;
+            end
+        end
+        % Also check any folder matching *aptos* in rawDataDir
+        if isempty(aptosDir)
+            dList = dir(fullfile(rawDataDir, '*aptos*'));
+            for d = 1:numel(dList)
+                if dList(d).isdir && ~startsWith(dList(d).name, '.')
+                    aptosDir = fullfile(dList(d).folder, dList(d).name);
+                    break;
+                end
+            end
+        end
+        
+        if ~isempty(aptosDir)
+            % Look for train.csv in aptos root, labels, or recursively
             possibleCsvs = {
                 fullfile(aptosDir, 'train.csv')
                 fullfile(aptosDir, 'labels', 'train.csv')
@@ -50,6 +71,12 @@ function manifest = create_manifest()
                 if exist(possibleCsvs{c}, 'file')
                     aptosCsvPath = possibleCsvs{c};
                     break;
+                end
+            end
+            if isempty(aptosCsvPath)
+                rCsv = dir(fullfile(aptosDir, '**', 'train.csv'));
+                if ~isempty(rCsv)
+                    aptosCsvPath = fullfile(rCsv(1).folder, rCsv(1).name);
                 end
             end
             

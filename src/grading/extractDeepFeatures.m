@@ -100,6 +100,12 @@ function model = runTraining(imageDir, labelsTable, options)
     validMask = ~isnan(double(labelsTable.(labelCol)));
     subTable = labelsTable(validMask, :);
     
+    if height(subTable) == 0
+        error('DRPipeline:extractDeepFeatures:NoLabeledImages', ...
+            ['Table has %d rows, but 0 rows have valid DR grades (all are NaN).\n' ...
+             'Please re-run `create_manifest` to ensure `train.csv` labels are properly indexed.'], height(labelsTable));
+    end
+    
     % Resolve file paths on disk
     rawPaths = string(subTable.(fileCol));
     resolvedPaths = strings(height(subTable), 1);
@@ -126,8 +132,13 @@ function model = runTraining(imageDir, labelsTable, options)
     end
     
     if ~any(existsMask)
+        sampleTried = rawPaths(1);
         error('DRPipeline:extractDeepFeatures:ImagesNotFound', ...
-            'None of the images listed in the table could be found in "%s".', imageDir);
+            ['None of the %d labeled images could be located on disk.\n' ...
+             'Example path tried: %s\n' ...
+             'Searched in folder: %s\n' ...
+             'Please verify image files exist in `train_images/`.'], ...
+             height(subTable), sampleTried, imageDir);
     end
     
     subTable = subTable(existsMask, :);
