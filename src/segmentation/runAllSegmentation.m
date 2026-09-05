@@ -1,4 +1,4 @@
-function segResult = runAllSegmentation(img, options)
+function segResult = runAllSegmentation(img, modelsInput)
 %RUNALLSEGMENTATION Master orchestrator that runs all segmentation sub-modules.
 %
 %   segResult = runAllSegmentation(img) runs all segmentation modules on the 
