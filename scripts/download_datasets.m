@@ -14,7 +14,11 @@ function download_datasets()
 
     try
         % Define project root and data directories
-        projectRoot = fullfile('d:', 'sih_project');
+        % Dynamic project root resolution
+        projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
+        if isempty(projectRoot) || ~exist(projectRoot, 'dir')
+            projectRoot = fileparts(fileparts(mfilename('fullpath')));
+        end
         rawDataDir = fullfile(projectRoot, 'data', 'raw');
         
         % List of datasets to process

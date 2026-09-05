@@ -10,7 +10,11 @@ function validate_data()
     try
         fprintf('Starting data validation...\n');
         
-        projectRoot = fullfile('d:', 'sih_project');
+        % Dynamic project root resolution
+        projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
+        if isempty(projectRoot) || ~exist(projectRoot, 'dir')
+            projectRoot = fileparts(fileparts(mfilename('fullpath')));
+        end
         manifestDir = fullfile(projectRoot, 'data', 'manifests');
         reportsDir = fullfile(projectRoot, 'data', 'reports');
         

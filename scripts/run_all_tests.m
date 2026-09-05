@@ -7,13 +7,18 @@ import matlab.unittest.TestSuite;
 import matlab.unittest.plugins.DiagnosticsValidationPlugin;
 import matlab.unittest.plugins.TestReportPlugin;
 
-testsDir = fullfile('d:', 'sih_project', 'tests');
+projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
+if isempty(projectRoot) || ~exist(projectRoot, 'dir')
+    projectRoot = fileparts(fileparts(mfilename('fullpath')));
+end
+
+testsDir = fullfile(projectRoot, 'tests');
 suite = TestSuite.fromFolder(testsDir);
 
 runner = TestRunner.withTextOutput;
 runner.addPlugin(DiagnosticsValidationPlugin);
 
-reportDir = fullfile('d:', 'sih_project', 'results', 'test_reports');
+reportDir = fullfile(projectRoot, 'results', 'test_reports');
 if ~exist(reportDir, 'dir')
     mkdir(reportDir);
 end
