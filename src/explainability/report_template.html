@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DR Screening Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
+        .grade { font-size: 2em; font-weight: bold; }
+        .grade-0 { color: green; }
+        .grade-1 { color: #ccaa00; }
+        .grade-2 { color: orange; }
+        .grade-3 { color: red; }
+        .grade-4 { color: darkred; }
+        @media print {
+            body { font-size: 12pt; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Diabetic Retinopathy Screening Report</h1>
+        <p>Patient ID: {{IMAGE_ID}} | Date: {{DATE}}</p>
+    </div>
+    
+    <div style="display: flex; justify-content: space-around; margin: 20px 0;">
+        <div>
+            <h3>Original Image</h3>
+            <img src="{{ORIGINAL_IMG}}" width="300"/>
+        </div>
+        <div>
+            <h3>Enhanced Image</h3>
+            <img src="{{ENHANCED_IMG}}" width="300"/>
+        </div>
+        <div>
+            <h3>Grad-CAM Overlay</h3>
+            <img src="{{GRADCAM_IMG}}" width="300"/>
+        </div>
+    </div>
+    
+    <div style="text-align: center;">
+        <h2>DR Grade: <span class="grade grade-{{DR_GRADE}}">Level {{DR_GRADE}} ({{GRADE_NAME}})</span></h2>
+        <p>Confidence: {{CONFIDENCE}}</p>
+    </div>
+    
+    <div>
+        <h3>Evidence Summary</h3>
+        {{EVIDENCE_TABLE}}
+    </div>
+    
+    <div>
+        <h3>Clinical Recommendation</h3>
+        <p>{{RECOMMENDATION}}</p>
+    </div>
+    
+    <div style="margin-top: 50px; font-size: 0.8em; color: #666; text-align: center;">
+        <p>Disclaimer: This report is generated automatically. Please consult an ophthalmologist.</p>
+        <p>Processing Time: {{PROCESSING_TIME}}</p>
+    </div>
+</body>
+</html>
