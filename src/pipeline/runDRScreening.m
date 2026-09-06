@@ -243,9 +243,13 @@ function result = runDRScreening(imagePath, options)
 
         % 1. Load Multiclass Model
         multiMdl = [];
+        multiThresholds = [];
         if ~isempty(options.GradingModels) && isfield(options.GradingModels, 'multiclass')
             if isfield(options.GradingModels.multiclass, 'model')
                 multiMdl = options.GradingModels.multiclass.model;
+                if isfield(options.GradingModels.multiclass, 'thresholds')
+                    multiThresholds = options.GradingModels.multiclass.thresholds;
+                end
             else
                 multiMdl = options.GradingModels.multiclass;
             end
@@ -253,8 +257,12 @@ function result = runDRScreening(imagePath, options)
             mdl = load(multiclassPath);
             if isfield(mdl, 'model')
                 multiMdl = mdl.model;
+                if isfield(mdl, 'thresholds'), multiThresholds = mdl.thresholds; end
             elseif isfield(mdl, 'multiModelStruct') && isfield(mdl.multiModelStruct, 'model')
                 multiMdl = mdl.multiModelStruct.model;
+                if isfield(mdl.multiModelStruct, 'thresholds')
+                    multiThresholds = mdl.multiModelStruct.thresholds;
+                end
             elseif isa(mdl, 'classreg.learning.model.CompactFullClassificationModel') || isa(mdl, 'ClassificationECOC')
                 multiMdl = mdl;
             end
@@ -285,7 +293,7 @@ function result = runDRScreening(imagePath, options)
             end
         end
 
-        % 3. Multiclass Prediction with Dynamic Feature Dimension Adaptation
+        % 3. Multiclass Prediction (Supports SOTA Ordinal Regressor + OptimizedRounder)
         if ~isempty(multiMdl)
             nExp = 0;
             if isprop(multiMdl, 'NumPredictors')
@@ -308,26 +316,57 @@ function result = runDRScreening(imagePath, options)
                 inputFeats = deepFeats;
             end
 
-            [predGrade, scoreLoss] = predict(multiMdl, inputFeats);
-            if iscell(predGrade), predGrade = predGrade{1}; end
-            if ischar(predGrade) || isstring(predGrade), predGrade = str2double(predGrade); end
-            if iscategorical(predGrade), predGrade = double(string(predGrade)); end
-            grade = round(max(0, min(4, double(predGrade))));
+            if ~isempty(multiThresholds) && numel(multiThresholds) == 4
+                % SOTA Method: Continuous Ordinal Severity Prediction + QWK-Optimized Thresholds
+                continuousScore = predict(multiMdl, inputFeats);
+                continuousScore = double(continuousScore(1));
 
-            % Normalize loss/scores to proper class probabilities via softmax
-            if ~isempty(scoreLoss) && numel(scoreLoss) == 5
-                s = scoreLoss(:)';
-                expS = exp(s - max(s));
-                rawProbs = expS / sum(expS);
+                if continuousScore < multiThresholds(1)
+                    grade = 0;
+                elseif continuousScore < multiThresholds(2)
+                    grade = 1;
+                elseif continuousScore < multiThresholds(3)
+                    grade = 2;
+                elseif continuousScore < multiThresholds(4)
+                    grade = 3;
+                else
+                    grade = 4;
+                end
+
+                % Distance-based Gaussian posterior probabilities across the 5 ordinal centroids
+                T = multiThresholds;
+                centroids = [T(1)/2, (T(1) + T(2))/2, (T(2) + T(3))/2, (T(3) + T(4))/2, T(4) + 0.6];
+                sigma = 0.5 * max(0.4, mean(diff(T)));
+                dists = -((continuousScore - centroids).^2) / (2 * sigma^2);
+                expD = exp(dists - max(dists));
+                rawProbs = expD / sum(expD);
+
+                isReferable = (continuousScore >= multiThresholds(2)) || (grade >= 2);
+                result.continuousScore = continuousScore;
             else
-                rawProbs = zeros(1, 5);
-                rawProbs(grade + 1) = 0.88;
+                % Standard ECOC Multiclass Classification
+                [predGrade, scoreLoss] = predict(multiMdl, inputFeats);
+                if iscell(predGrade), predGrade = predGrade{1}; end
+                if ischar(predGrade) || isstring(predGrade), predGrade = str2double(predGrade); end
+                if iscategorical(predGrade), predGrade = double(string(predGrade)); end
+                grade = round(max(0, min(4, double(predGrade))));
+
+                if ~isempty(scoreLoss) && numel(scoreLoss) == 5
+                    s = scoreLoss(:)';
+                    expS = exp(s - max(s));
+                    rawProbs = expS / sum(expS);
+                else
+                    rawProbs = zeros(1, 5);
+                    rawProbs(grade + 1) = 0.88;
+                end
+                isReferable = (grade >= 2);
             end
         else
             % Fallback: rule-based grading from lesion counts
             grade = ruleBasedGrading(segResult);
             rawProbs = zeros(1, 5);
             rawProbs(grade + 1) = 0.65;
+            isReferable = (grade >= 2);
         end
 
         % 4. Binary Referable Prediction

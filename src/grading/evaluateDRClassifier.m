@@ -58,7 +58,17 @@ function evalMetrics = evaluateDRClassifier(trainedModels, testFeatures, testLab
     
     %% Multiclass Evaluation
     multiModel = trainedModels.multiclass.model;
-    [YPredMulti, scoreMulti] = predict(multiModel, testFeatures);
+    if isfield(trainedModels.multiclass, 'thresholds') && ~isempty(trainedModels.multiclass.thresholds)
+        optThresh = trainedModels.multiclass.thresholds;
+        continuousScores = predict(multiModel, testFeatures);
+        YPredMulti = zeros(size(continuousScores));
+        YPredMulti(continuousScores >= optThresh(1)) = 1;
+        YPredMulti(continuousScores >= optThresh(2)) = 2;
+        YPredMulti(continuousScores >= optThresh(3)) = 3;
+        YPredMulti(continuousScores >= optThresh(4)) = 4;
+    else
+        [YPredMulti, scoreMulti] = predict(multiModel, testFeatures);
+    end
     
     evalMetrics.multiclass.accuracy = sum(YPredMulti == testLabels) / numel(testLabels);
     evalMetrics.multiclass.confusionMatrix = confusionmat(testLabels, YPredMulti);

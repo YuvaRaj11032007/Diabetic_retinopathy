@@ -88,26 +88,64 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
              '========================================================================\n']);
     end
 
-    %% Multiclass Model (5-class)
-    fprintf('Training Multiclass Model (ECOC SVM)...\n');
+    %% SOTA Step 1: Ordinal Continuous Regressor (Ridge / SVR)
+    % Treats DR grading as an ordinal progression scale (0 -> 1 -> 2 -> 3 -> 4)
+    fprintf('Training Ordinal Continuous Regressor...\n');
+    tReg = tic;
+    
+    if exist('fitrlinear', 'file') == 2
+        regModel = fitrlinear(XTrain, double(YTrainMulticlass), ...
+            'Learner', 'leastsquares', 'Regularization', 'ridge');
+    else
+        regModel = fitrsvm(XTrain, double(YTrainMulticlass), ...
+            'KernelFunction', 'linear', 'Standardize', true);
+    end
+    
+    valContinuous = predict(regModel, XVal);
+    valContinuous = double(valContinuous(:));
+    
+    %% SOTA Step 2: OptimizedRounder (QWK Threshold Optimization)
+    % Kaggle 1st-place APTOS methodology: optimize cutoffs to directly maximize Quadratic Weighted Kappa
+    fprintf('Optimizing Decision Thresholds for Quadratic Weighted Kappa (QWK)...\n');
+    [optThresholds, bestQWK] = optimizeThresholds(valContinuous, double(YValMulticlass));
+    
+    YPredOrdinal = discretizeContinuous(valContinuous, optThresholds);
+    valAccOrdinal = sum(YPredOrdinal == YValMulticlass) / numel(YValMulticlass);
+    valConfusionOrdinal = confusionmat(YValMulticlass, YPredOrdinal);
+    
+    fprintf('Ordinal Model Training Done (%.2fs):\n', toc(tReg));
+    fprintf('  Validation QWK : %.4f (Industry Benchmark: > 0.85)\n', bestQWK);
+    fprintf('  Validation Acc : %.2f%%\n', valAccOrdinal * 100);
+    fprintf('  Optimized Cutoffs: [0 < %.2f <= 1 < %.2f <= 2 < %.2f <= 3 < %.2f <= 4]\n', ...
+        optThresholds(1), optThresholds(2), optThresholds(3), optThresholds(4));
+
+    %% SOTA Step 3: Cost-Sensitive Multiclass Model (Quadratic Distance Matrix)
+    fprintf('Training Cost-Sensitive Multiclass Model (ECOC with Quadratic Distance Penalty)...\n');
     tMulti = tic;
     tMultiOpts = templateSVM('Standardize', true);
     
-    if options.optimizeHyperparameters
-        multiModel = fitcecoc(XTrain, YTrainMulticlass, 'Learners', tMultiOpts, ...
-            'OptimizeHyperparameters', 'auto', ...
-            'HyperparameterOptimizationOptions', struct('AcquisitionFunctionName', 'expected-improvement-plus', 'ShowPlots', false));
-    else
-        multiModel = fitcecoc(XTrain, YTrainMulticlass, 'Learners', tMultiOpts, 'Coding', 'onevsall');
-    end
+    % Quadratic cost matrix: misclassifying 4 as 0 costs 16, 4 as 3 costs 1
+    [I_grid, J_grid] = meshgrid(0:4, 0:4);
+    costMatrix = (I_grid - J_grid).^2;
+    
+    multiModel = fitcecoc(XTrain, YTrainMulticlass, 'Learners', tMultiOpts, ...
+        'Coding', 'onevsall', 'Cost', costMatrix);
     
     YPredMulti = predict(multiModel, XVal);
+    valAccMulti = sum(YPredMulti == YValMulticlass) / numel(YValMulticlass);
+    valConfusionMulti = confusionmat(YValMulticlass, YPredMulti);
     
-    output.multiclass.model = multiModel;
-    output.multiclass.valMetrics.accuracy = sum(YPredMulti == YValMulticlass) / numel(YValMulticlass);
-    output.multiclass.valMetrics.confusionMatrix = confusionmat(YValMulticlass, YPredMulti);
-    
-    fprintf('Multiclass Training Done (%.2fs), Val Acc: %.2f%%\n', toc(tMulti), output.multiclass.valMetrics.accuracy * 100);
+    fprintf('Cost-Sensitive ECOC Done (%.2fs), Val Acc: %.2f%%\n', toc(tMulti), valAccMulti * 100);
+
+    % Package Multiclass Output
+    output.multiclass.model = regModel;             % Primary continuous ordinal regressor
+    output.multiclass.thresholds = optThresholds;   % QWK-optimized decision boundaries
+    output.multiclass.classifier = multiModel;      % Cost-sensitive ECOC classifier
+    output.multiclass.valMetrics.QWK = bestQWK;
+    output.multiclass.valMetrics.accuracy = valAccOrdinal;
+    output.multiclass.valMetrics.confusionMatrix = valConfusionOrdinal;
+    output.multiclass.valMetrics.ecocAccuracy = valAccMulti;
+    output.multiclass.valMetrics.ecocConfusionMatrix = valConfusionMulti;
 
     %% Binary Model (Referable)
     % Grade >= 2 is Referable (1), < 2 is Non-referable (0)
@@ -129,7 +167,6 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
     end
     
     [~, scoreBin] = predict(binModel, XVal);
-    % scoreBin(:,2) is the score for class 1 (Referable)
     
     % Find optimal threshold for sensitivity maximizing with specificity >= 0.85
     [Xroc, Yroc, Troc, AUC] = perfcurve(YValBinary, scoreBin(:,2), 1);
@@ -147,7 +184,7 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
         end
     end
     
-    % If unable to meet specificity >= 0.85 condition, just pick closest point to (0,1)
+    % If unable to meet specificity >= 0.85 condition, pick closest point to (0,1)
     if bestSens == 0
         dist = Xroc.^2 + (1-Yroc).^2;
         [~, minIdx] = min(dist);
@@ -194,16 +231,72 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
         warning('DRPipeline:Grading:SaveFailed', 'Could not save models: %s', ME.message);
     end
     
-    % Optional: Plots & Confusion matrices can be saved here to results/grading
+    % Plots & Confusion matrices saved to results/grading
     resDir = fullfile(projectRoot, 'results', 'grading');
     if ~exist(resDir, 'dir')
         mkdir(resDir);
     end
     
     fig = figure('Visible', 'off');
-    confusionchart(YValMulticlass, YPredMulti);
-    title('Validation Confusion Matrix - Multiclass');
+    confusionchart(YValMulticlass, YPredOrdinal);
+    title(sprintf('Validation Confusion Matrix - Ordinal Regressor (QWK: %.3f)', bestQWK));
     saveas(fig, fullfile(resDir, 'val_confusion_multiclass.png'));
     close(fig);
 
+end
+
+function [optThresholds, bestQWK] = optimizeThresholds(valScores, yTrue)
+%OPTIMIZETHRESHOLDS Find 4 cutoffs that maximize Quadratic Weighted Kappa (QWK).
+    initT = [0.5, 1.5, 2.5, 3.5];
+    
+    function loss = objFunc(t)
+        st = sort(t);
+        preds = discretizeContinuous(valScores, st);
+        loss = -computeQWK(preds, yTrue);
+    end
+
+    opts = optimset('Display', 'off', 'MaxIter', 500, 'TolX', 1e-4);
+    optT = fminsearch(@objFunc, initT, opts);
+    optThresholds = sort(optT);
+    bestQWK = computeQWK(discretizeContinuous(valScores, optThresholds), yTrue);
+end
+
+function preds = discretizeContinuous(scores, thresholds)
+%DISCRETIZEONTINUOUS Discretize continuous scores into classes 0, 1, 2, 3, 4.
+    preds = zeros(size(scores));
+    preds(scores >= thresholds(1)) = 1;
+    preds(scores >= thresholds(2)) = 2;
+    preds(scores >= thresholds(3)) = 3;
+    preds(scores >= thresholds(4)) = 4;
+end
+
+function qwk = computeQWK(yPred, yTrue)
+%COMPUTEQWK Compute Quadratic Weighted Kappa between predictions and true labels.
+    yPred = double(round(max(0, min(4, yPred(:)))));
+    yTrue = double(round(max(0, min(4, yTrue(:)))));
+    N = numel(yTrue);
+    K = 5;
+    
+    % Confusion matrix O
+    O = zeros(K, K);
+    for i = 1:N
+        O(yTrue(i) + 1, yPred(i) + 1) = O(yTrue(i) + 1, yPred(i) + 1) + 1;
+    end
+    
+    % Expected matrix E
+    histTrue = sum(O, 2);
+    histPred = sum(O, 1);
+    E = (histTrue * histPred) / max(1, N);
+    
+    % Weight matrix W (quadratic distance penalty)
+    [I, J] = meshgrid(0:K-1, 0:K-1);
+    W = ((I - J).^2) / ((K - 1)^2);
+    
+    num = sum(W .* O, 'all');
+    den = sum(W .* E, 'all');
+    if den == 0
+        qwk = 1;
+    else
+        qwk = 1 - (num / den);
+    end
 end
