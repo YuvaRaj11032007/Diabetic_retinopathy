@@ -67,27 +67,37 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
             error('DRPipeline:segmentation:InvalidFundusMask', 'No valid fundus area detected.');
         end
 
-        % 3. Morphological Top-Hat filter for local contrast isolation
-        tophatG = imtophat(G, strel('disk', 12));
-        tophatL = imtophat(L / 100, strel('disk', 12));
+        % 3. Multi-Scale Morphological Top-Hat filter for local contrast isolation
+        % Captures both small punctate flecks and large confluent plaques
+        tophatG = max(cat(3, ...
+            imtophat(G, strel('disk', 6)), ...
+            imtophat(G, strel('disk', 15)), ...
+            imtophat(G, strel('disk', 30))), [], 3);
+        
+        tophatL = max(cat(3, ...
+            imtophat(L / 100, strel('disk', 6)), ...
+            imtophat(L / 100, strel('disk', 15)), ...
+            imtophat(L / 100, strel('disk', 30))), [], 3);
+        
         contrastBright = max(tophatG, tophatL);
 
-        % Real hard exudates have sharp local contrast (> 0.075), not subtle background texture
-        contrastMask = (contrastBright > 0.075) & fundusMask;
+        % 4. Adaptive Color & Luminance Thresholding
+        medL = median(L_fundus);
+        stdL = std(L_fundus);
+        medB = median(b_fundus);
+        stdB = std(b_fundus);
 
-        % 4. Color & Brightness thresholding
-        % Real exudates are among the brightest pixels with strong yellow component
-        pL92 = prctile(L_fundus, 92);
-        pb75 = prctile(b_fundus, 75);
+        % Hard exudates exhibit elevated yellow chroma (b* in L*a*b* or G > B)
+        isYellowish = (b > (medB + 0.35 * stdB)) | ((G > B + 0.04) & (R > 0.30));
 
-        brightL = (L > pL92) & fundusMask;
-        yellowB = (b > pb75) & fundusMask;
+        % High-confidence core seeds: strong local contrast OR high luminance with yellow chroma
+        brightCore = (L > (medL + 1.25 * stdL)) & isYellowish;
+        contrastCore = (contrastBright > 0.048) & isYellowish;
+        coreSeeds = (brightCore | contrastCore) & fundusMask;
 
-        % Color verification: exudates are yellow-white (high R and G, lower B)
-        isYellowish = (R > B + 0.08) & (G > B) & (R > 0.45);
-
-        % Candidates must have high local contrast AND high brightness AND yellow hue
-        candidateMask = contrastMask & brightL & yellowB & isYellowish & fundusMask;
+        % Boundary for morphological reconstruction (region growing)
+        boundaryMask = ((contrastBright > 0.022) | (L > (medL + 0.65 * stdL))) & ...
+            (b > medB) & (G > B) & fundusMask;
 
         % 5. Optic Disc Exclusion
         odStats = regionprops(odMask, 'EquivDiameter');
@@ -96,24 +106,25 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
             odRadius = odDiam / 2;
             seMargin = max(5, min(14, round(odRadius * 0.15)));
             expandedOD = imdilate(odMask, strel('disk', seMargin));
-            candidateMask(expandedOD) = false;
+            coreSeeds(expandedOD) = false;
+            boundaryMask(expandedOD) = false;
         end
 
         % 6. Vessel Exclusion
         if any(vesselMask(:))
-            candidateMask(vesselMask) = false;
+            coreSeeds(vesselMask) = false;
+            boundaryMask(vesselMask) = false;
         end
 
-        % 7. Remove small noise (minimum 10 pixels for genuine exudates)
-        candidateMask = bwareaopen(candidateMask, 10);
-
-        % 8. Morphological reconstruction to restore full lesion borders
-        marker = imerode(candidateMask, strel('disk', 1));
-        if any(marker(:))
-            reconstructedMask = imreconstruct(marker, candidateMask);
+        % 7. Morphological reconstruction to recover full confluent lesions
+        if any(coreSeeds(:))
+            reconstructedMask = imreconstruct(coreSeeds, boundaryMask);
         else
-            reconstructedMask = candidateMask;
+            reconstructedMask = false(H, W);
         end
+
+        % 8. Remove small noise (minimum 8 pixels for genuine exudates)
+        reconstructedMask = bwareaopen(reconstructedMask, 8);
 
         % 9. Differentiate Hard and Soft Exudates
         stats = regionprops(reconstructedMask, L, 'Area', 'MeanIntensity', 'PixelIdxList', 'BoundingBox');
