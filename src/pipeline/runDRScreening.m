@@ -357,15 +357,61 @@ function result = runDRScreening(imagePath, options)
         end
 
         % 5. Clinical Safety Override (ICDR Lesion Verification)
+        % The deep learning model is the primary diagnostic classifier.
+        % A safety override is only applied when unequivocal, massive lesion clusters
+        % are physically detected by segmentation that contradict a false-negative low grade.
         ruleGrade = ruleBasedGrading(segResult);
-        if ruleGrade > grade
-            if options.Verbose
-                fprintf(' [Clinical Safety Alert: Lesion signs indicate Grade %d, upgrading from ML Grade %d]', ...
-                    ruleGrade, grade);
+
+        if ~isempty(multiMdl)
+            % Extract lesion counts for confirmed safety check
+            exArea = 0; exCount = 0; heCount = 0; heArea = 0; nvProb = 0; maCount = 0;
+            if isfield(segResult, 'exudates') && ~isempty(segResult.exudates)
+                if isfield(segResult.exudates, 'totalArea'), try, exArea = segResult.exudates.totalArea; catch, end; end
+                if isfield(segResult.exudates, 'count'), try, exCount = segResult.exudates.count; catch, end; end
             end
+            if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages)
+                if isfield(segResult.hemorrhages, 'count'), try, heCount = segResult.hemorrhages.count; catch, end; end
+                if isfield(segResult.hemorrhages, 'totalArea'), try, heArea = segResult.hemorrhages.totalArea; catch, end; end
+            end
+            if isfield(segResult, 'neovascularization') && ~isempty(segResult.neovascularization)
+                if isfield(segResult.neovascularization, 'nvProbability'), try, nvProb = segResult.neovascularization.nvProbability; catch, end; end
+            end
+            if isfield(segResult, 'microaneurysms') && ~isempty(segResult.microaneurysms)
+                if isfield(segResult.microaneurysms, 'count'), try, maCount = segResult.microaneurysms.count; catch, end; end
+            end
+
+            hasSevereExudates = (exArea > 800 && exCount >= 8);
+            hasSevereHemorrhages = (heCount >= 20 || heArea > 1000);
+            hasDefinitePDR = (nvProb >= 0.7 && (maCount >= 3 || heCount >= 3));
+            hasModerateExudates = (exArea > 350 && exCount >= 5);
+
+            if grade < 3 && (hasSevereExudates || hasSevereHemorrhages)
+                if options.Verbose
+                    fprintf(' [Clinical Safety Alert: Massive lesion burden confirms Grade 3, upgrading from ML Grade %d]', grade);
+                end
+                grade = 3;
+                rawProbs = zeros(1, 5); rawProbs(grade + 1) = 0.90;
+                isReferable = true;
+            elseif grade < 2 && hasModerateExudates
+                if options.Verbose
+                    fprintf(' [Clinical Safety Alert: Substantial exudate clusters confirm Grade 2, upgrading from ML Grade %d]', grade);
+                end
+                grade = 2;
+                rawProbs = zeros(1, 5); rawProbs(grade + 1) = 0.85;
+                isReferable = true;
+            elseif grade < 4 && hasDefinitePDR
+                if options.Verbose
+                    fprintf(' [Clinical Safety Alert: Confirmed neovascular fronds indicate Grade 4, upgrading from ML Grade %d]', grade);
+                end
+                grade = 4;
+                rawProbs = zeros(1, 5); rawProbs(grade + 1) = 0.90;
+                isReferable = true;
+            end
+        else
+            % Fallback when no ML model is available: use rule-based directly
             grade = ruleGrade;
             rawProbs = zeros(1, 5);
-            rawProbs(grade + 1) = 0.90;
+            rawProbs(grade + 1) = 0.70;
             isReferable = (grade >= 2);
         end
 
@@ -555,23 +601,23 @@ function grade = ruleBasedGrading(segResult)
     end
 
     % ICDR Clinical Classification Logic:
-    % Grade 4 (PDR): Definite neovascularization (NVD or NVE) or preretinal hemorrhage
-    if nvProb > 0.4
+    % Grade 4 (PDR): Definite neovascularization accompanied by diabetic microvascular lesions
+    if nvProb >= 0.7 && (maCount >= 3 || heCount >= 3 || exArea > 100)
         grade = 4;
     % Grade 3 (Severe NPDR): Any of:
-    %  - Hemorrhages count >= 20 (or large hemorrhage area > 1000 px)
-    %  - Extensive hard exudate clusters (area > 800 px or count >= 15)
+    %  - Severe hemorrhages count >= 20 (or large hemorrhage area > 1000 px)
+    %  - Extensive hard exudate clusters (area > 800 px AND count >= 8)
     %  - Multiple cotton-wool spots (soft exudates > 200 px)
-    elseif heCount >= 20 || heArea > 1000 || exArea > 800 || exCount >= 15 || softExCount > 200
+    elseif heCount >= 20 || heArea > 1000 || (exArea > 800 && exCount >= 8) || softExCount > 200
         grade = 3;
     % Grade 2 (Moderate NPDR):
-    %  - Presence of exudates (hard or soft) OR
-    %  - Both microaneurysms and hemorrhages OR
-    %  - Multiple microaneurysms (>= 5) or any hemorrhages
-    elseif exArea > 0 || exCount > 0 || (maCount > 0 && heCount > 0) || heCount > 0 || maCount >= 5
+    %  - Definite hard exudates (area > 150 px AND count >= 3) OR
+    %  - Both microaneurysms and hemorrhages (maCount >= 3 AND heCount >= 2) OR
+    %  - Multiple microaneurysms (>= 5) or definite hemorrhages (>= 3)
+    elseif (exArea > 150 && exCount >= 3) || (maCount >= 3 && heCount >= 2) || heCount >= 3 || maCount >= 5
         grade = 2;
-    % Grade 1 (Mild NPDR): Microaneurysms only
-    elseif maCount > 0
+    % Grade 1 (Mild NPDR): Microaneurysms only (at least 2 MAs)
+    elseif maCount >= 2
         grade = 1;
     else
         grade = 0;

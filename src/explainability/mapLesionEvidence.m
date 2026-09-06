@@ -60,17 +60,17 @@ function evidence = mapLesionEvidence(segResult, drGrade)
     idx = 1;
 
     % --- Criterion 1: Hard Exudates ---
-    if exArea > 800 || exCount >= 15
+    if exArea > 800 && exCount >= 8
         sev = 'Severe';
         txt = sprintf('%d distinct hard exudate clusters detected (total area: %d px) in the macular/posterior pole region.', exCount, round(exArea));
         meets = true;
-    elseif exArea > 0 || exCount > 0
+    elseif exArea > 150 && exCount >= 3
         sev = 'Moderate';
         txt = sprintf('%d hard exudate lesions detected (%d px), indicating lipid leakage.', exCount, round(exArea));
         meets = true;
     else
         sev = 'None';
-        txt = 'No hard exudates or lipid deposits detected in the visible retina.';
+        txt = 'No significant hard exudates or lipid deposits detected in the retina.';
         meets = false;
     end
     evidence(idx).criterion = 'Hard Exudates (Lipid Transudates)';
@@ -87,7 +87,7 @@ function evidence = mapLesionEvidence(segResult, drGrade)
         sev = 'Severe';
         txt = sprintf('Extensive retinal hemorrhages detected (%d lesions, %d px), meeting ICDR 4-2-1 threshold.', heCount, round(heArea));
         meets = true;
-    elseif heCount > 0
+    elseif heCount >= 3
         sev = 'Moderate';
         txt = sprintf('%d retinal hemorrhages identified (%d px).', heCount, round(heArea));
         meets = true;
@@ -106,13 +106,17 @@ function evidence = mapLesionEvidence(segResult, drGrade)
     idx = idx + 1;
 
     % --- Criterion 3: Microaneurysms ---
-    if maCount > 15
+    if maCount >= 15
         sev = 'Severe';
         txt = sprintf('Frequent microaneurysms identified (%d lesions), indicating widespread capillary outpouching.', maCount);
         meets = true;
-    elseif maCount > 0
-        sev = 'Mild to Moderate';
+    elseif maCount >= 4
+        sev = 'Moderate';
         txt = sprintf('%d microaneurysms detected in the capillary beds.', maCount);
+        meets = true;
+    elseif maCount >= 2
+        sev = 'Mild';
+        txt = sprintf('%d isolated microaneurysms detected in the retina.', maCount);
         meets = true;
     else
         sev = 'None';
@@ -129,7 +133,7 @@ function evidence = mapLesionEvidence(segResult, drGrade)
     idx = idx + 1;
 
     % --- Criterion 4: Cotton-Wool Spots ---
-    if softExCount > 150
+    if softExCount > 200
         sev = 'Moderate to Severe';
         txt = sprintf('Cotton-wool spots (nerve fiber layer infarcts) observed (%d px).', round(softExCount));
         meets = true;
@@ -140,7 +144,7 @@ function evidence = mapLesionEvidence(segResult, drGrade)
     end
     evidence(idx).criterion = 'Cotton-Wool Spots (Soft Exudates)';
     evidence(idx).lesion_type = 'CWS';
-    evidence(idx).count = double(softExCount > 150);
+    evidence(idx).count = double(softExCount > 200);
     evidence(idx).area = softExCount;
     evidence(idx).meets_criterion = meets;
     evidence(idx).evidence_text = txt;
@@ -148,7 +152,7 @@ function evidence = mapLesionEvidence(segResult, drGrade)
     idx = idx + 1;
 
     % --- Criterion 5: Neovascularization ---
-    if nvProb > 0.4
+    if nvProb >= 0.7
         sev = 'Proliferative (Severe)';
         txt = sprintf('Abnormal vessel tortuosity/fronds indicative of neovascularization (probability: %.1f%%).', nvProb * 100);
         meets = true;
@@ -159,7 +163,7 @@ function evidence = mapLesionEvidence(segResult, drGrade)
     end
     evidence(idx).criterion = 'Neovascularization (NVD / NVE)';
     evidence(idx).lesion_type = 'NV';
-    evidence(idx).count = double(nvProb > 0.4);
+    evidence(idx).count = double(nvProb >= 0.7);
     evidence(idx).area = nvProb;
     evidence(idx).meets_criterion = meets;
     evidence(idx).evidence_text = txt;

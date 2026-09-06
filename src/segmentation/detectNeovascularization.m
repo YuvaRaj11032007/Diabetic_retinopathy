@@ -128,50 +128,57 @@ function nvResult = detectNeovascularization(img, vesselMask, odResult)
                 distToOD = norm(patchCentroid - odCentroid);
                 inNVDZone = distToOD <= nvdZoneRadius;
                 
-                % Determine if abnormal (thresholds are illustrative)
+                % Determine if abnormal:
+                % Neovascularization is characterized by chaotic capillary nets with intense branch density,
+                % high fractal dimension (> 1.65), and high vessel skeleton density.
+                % Normal optic disc bifurcations have low branch density and fd ~1.4.
                 isNVD = false;
                 isNVE = false;
-                
-                % Anomalously high density or complexity
-                if density > 0.15 && branchDensity > 0.002 && fd > 1.3
+
+                if density > 0.22 && branchDensity > 0.007 && fd > 1.65
                     if inNVDZone
                         isNVD = true;
-                        nvdFlag = true;
                     else
                         isNVE = true;
                         nveMask(y:yEnd, x:xEnd) = true;
                     end
                 end
-                
+
                 patches(idx).BoundingBox = [x, y, patchSize, patchSize];
                 patches(idx).Density = density;
                 patches(idx).FractalDim = fd;
                 patches(idx).BranchDensity = branchDensity;
                 patches(idx).IsNVD = isNVD;
                 patches(idx).IsNVE = isNVE;
-                
+
                 idx = idx + 1;
             end
         end
-        
+
         % 2. Aggregate image-level score
-        % Use top 5% most complex patches to determine overall NV probability
-        validFD = patchFD(patchFD > 0);
-        if ~isempty(validFD)
-            topFD = prctile(validFD, 95);
-            nvProbability = min(1, max(0, (topFD - 1.1) / 0.4)); % Normalize roughly to 0-1
+        % Multiple confirmed patches are required to declare NVD/NVE
+        nvdPatchCount = sum([patches.IsNVD]);
+        nvePatchCount = sum([patches.IsNVE]);
+
+        nvdFlag = (nvdPatchCount >= 2);
+        nveFlag = (nvePatchCount >= 2);
+
+        if nvdFlag && nveFlag
+            nvProbability = 0.95;
+        elseif nvdFlag
+            nvProbability = 0.85;
+        elseif nveFlag
+            nvProbability = 0.70;
+        elseif nvdPatchCount == 1 || nvePatchCount == 1
+            nvProbability = 0.15;
         else
-            nvProbability = 0;
+            nvProbability = 0.0;  % Clean normal vasculature
         end
-        
-        if nvdFlag
-            nvProbability = max(nvProbability, 0.8);
-        end
-        
+
         nvResult = struct();
         nvResult.nvProbability = nvProbability;
         nvResult.nvdFlag = nvdFlag;
-        nvResult.nveRegions = nveMask & fundusMaskApprox(H,W); % Mask out corners ideally
+        nvResult.nveRegions = nveMask & fundusMaskApprox(H,W);
         nvResult.patches = patches;
         
     catch ME
