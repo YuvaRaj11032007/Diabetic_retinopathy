@@ -196,10 +196,10 @@ function result = runDRScreening(imagePath, options)
     try
         backbonePath = fullfile(options.ModelsDir, 'grading', 'backbone_finetuned.mat');
         if ~isempty(options.GradingModels) && isfield(options.GradingModels, 'network')
-            deepFeats = extractDeepFeatures('extract', enhancedImg, options.GradingModels);
+            deepFeats = extractDeepFeatures('extract', img, options.GradingModels);
         elseif isfile(backbonePath)
             backbone = load(backbonePath);
-            deepFeats = extractDeepFeatures('extract', enhancedImg, backbone);
+            deepFeats = extractDeepFeatures('extract', img, backbone);
         else
             % Automatically use pretrained ResNet-50 backbone (cached in appdata for speed)
             if ~isappdata(0, 'DRPipeline_ResNet50')
@@ -215,7 +215,7 @@ function result = runDRScreening(imagePath, options)
             
             if ~isempty(net)
                 bbStruct = struct('network', net, 'featureLayerName', 'avg_pool');
-                deepFeats = extractDeepFeatures('extract', enhancedImg, bbStruct);
+                deepFeats = extractDeepFeatures('extract', img, bbStruct);
             else
                 warning('DRPipeline:pipeline:noBackbone', ...
                     'No trained backbone or ResNet-50 found. Using zero deep features.');
@@ -419,26 +419,16 @@ function result = runDRScreening(imagePath, options)
             end
         end
 
-        % 5. Diagnostic Decision & Clinical Safety Floor
-        % Under ICDR international clinical standards, overt lesions (such as
-        % multiple hemorrhages, hard exudates, or neovascularization) establish
-        % an authoritative clinical safety floor against catastrophic under-grading.
-        clinicalFloor = ruleBasedGrading(segResult);
+        % 5. Diagnostic Decision
+        % The trained multi-class classifier is the primary authoritative diagnostic model.
+        % Rule-based grading serves solely as a fallback if no trained model is loaded.
         if isempty(multiMdl)
-            grade = clinicalFloor;
+            grade = ruleBasedGrading(segResult);
             rawProbs = zeros(1, 5);
             rawProbs(grade + 1) = 0.70;
             rawProbs = rawProbs / sum(rawProbs);
             result.continuousScore = double(grade);
             isReferable = (grade >= 2);
-        elseif clinicalFloor >= 2 && grade < clinicalFloor
-            % Upgrade grade to clinicalFloor to eliminate catastrophic false-negatives
-            grade = clinicalFloor;
-            isReferable = true;
-            rawProbs = zeros(1, 5);
-            rawProbs(grade + 1) = 0.85;
-            rawProbs = rawProbs / sum(rawProbs);
-            result.continuousScore = max(result.continuousScore, double(grade));
         end
 
         if iscell(grade), grade = grade{1}; end
@@ -627,20 +617,19 @@ function grade = ruleBasedGrading(segResult)
     end
 
     % ICDR Clinical Classification Logic:
-    % Grade 4 (PDR): Definite neovascularization accompanied by diabetic microvascular lesions
-    if nvProb >= 0.7 && (maCount >= 3 || heCount >= 3 || exArea > 100)
+    % Grade 4 (PDR): Definite neovascularization
+    if nvProb >= 0.7
         grade = 4;
     % Grade 3 (Severe NPDR): Any of:
     %  - Severe hemorrhages count >= 20 (or large hemorrhage area > 1000 px)
-    %  - Extensive hard exudate clusters (area > 800 px AND count >= 8)
-    %  - Multiple cotton-wool spots (soft exudates > 200 px)
-    elseif heCount >= 20 || heArea > 1000 || (exArea > 800 && exCount >= 8) || softExCount > 200
+    %  - Extensive hard exudate clusters (area > 2000 px AND count >= 15)
+    elseif heCount >= 20 || heArea > 1000 || (exArea > 2000 && exCount >= 15)
         grade = 3;
     % Grade 2 (Moderate NPDR):
-    %  - Definite hard exudates (area > 150 px AND count >= 3) OR
+    %  - Definite hard exudates (area > 200 px AND count >= 5) OR
     %  - Both microaneurysms and hemorrhages (maCount >= 3 AND heCount >= 2) OR
     %  - Multiple microaneurysms (>= 5) or definite hemorrhages (>= 3)
-    elseif (exArea > 150 && exCount >= 3) || (maCount >= 3 && heCount >= 2) || heCount >= 3 || maCount >= 5
+    elseif (exArea > 200 && exCount >= 5) || (maCount >= 3 && heCount >= 2) || heCount >= 3 || maCount >= 5
         grade = 2;
     % Grade 1 (Mild NPDR): Microaneurysms only (at least 2 MAs)
     elseif maCount >= 2

@@ -32,8 +32,8 @@ function [decision, qualityResult, enhancedImg] = qualityGate(img, model, option
     arguments
         img (:,:,:) uint8
         model = []  % Pre-trained classifier (optional)
-        options.AcceptThreshold (1,1) double = 0.7
-        options.BorderlineThreshold (1,1) double = 0.4
+        options.AcceptThreshold (1,1) double = 0.50
+        options.BorderlineThreshold (1,1) double = 0.35
         options.Verbose (1,1) logical = true
     end
 

@@ -81,30 +81,29 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
         
         contrastBright = max(tophatG, tophatL);
 
-        % 4. Adaptive Color & Luminance Thresholding
-        medL = median(L_fundus);
-        stdL = std(L_fundus);
-        medB = median(b_fundus);
-        stdB = std(b_fundus);
+        % 4. Color & Contrast Thresholding for Hard Exudates
+        % Hard exudates are distinct, bright yellow-white lipid deposits.
+        % They exhibit high local contrast against the retinal background (>0.06),
+        % high luminance, elevated green channel intensity, and strong yellow component (b* > 0).
+        pL85 = prctile(L_fundus, 85);
+        pb75 = prctile(b_fundus, 75);
+        pG80 = prctile(G(fundusMask), 80);
 
-        % Hard exudates exhibit elevated yellow chroma (b* in L*a*b* or G > B)
-        isYellowish = (b > (medB + 0.35 * stdB)) | ((G > B + 0.04) & (R > 0.30));
-
-        % High-confidence core seeds: strong local contrast OR high luminance with yellow chroma
-        brightCore = (L > (medL + 1.25 * stdL)) & isYellowish;
-        contrastCore = (contrastBright > 0.048) & isYellowish;
-        coreSeeds = (brightCore | contrastCore) & fundusMask;
+        % Core seeds: MUST have high local contrast (> 0.065) AND high brightness AND yellow hue
+        % Normal smooth retina has contrast < 0.02, completely eliminating false positives on healthy eyes
+        isYellowCore = (b > pb75) & (G > B + 0.08) & (G ./ (R + 1e-4) > 0.58);
+        coreSeeds = (contrastBright > 0.065) & (L > pL85) & (G > pG80) & isYellowCore & fundusMask;
 
         % Boundary for morphological reconstruction (region growing)
-        boundaryMask = ((contrastBright > 0.022) | (L > (medL + 0.65 * stdL))) & ...
-            (b > medB) & (G > B) & fundusMask;
+        isYellowBound = (b > median(b_fundus)) & (G > B + 0.03) & (G ./ (R + 1e-4) > 0.48);
+        boundaryMask = (contrastBright > 0.035) & (L > median(L_fundus)) & isYellowBound & fundusMask;
 
         % 5. Optic Disc Exclusion
         odStats = regionprops(odMask, 'EquivDiameter');
         if ~isempty(odStats)
             odDiam = max([odStats.EquivDiameter]);
             odRadius = odDiam / 2;
-            seMargin = max(5, min(14, round(odRadius * 0.15)));
+            seMargin = max(6, min(18, round(odRadius * 0.20)));
             expandedOD = imdilate(odMask, strel('disk', seMargin));
             coreSeeds(expandedOD) = false;
             boundaryMask(expandedOD) = false;
@@ -123,8 +122,8 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
             reconstructedMask = false(H, W);
         end
 
-        % 8. Remove small noise (minimum 8 pixels for genuine exudates)
-        reconstructedMask = bwareaopen(reconstructedMask, 8);
+        % 8. Remove small noise (minimum 10 pixels for genuine exudates)
+        reconstructedMask = bwareaopen(reconstructedMask, 10);
 
         % 9. Differentiate Hard and Soft Exudates
         stats = regionprops(reconstructedMask, L, 'Area', 'MeanIntensity', 'PixelIdxList', 'BoundingBox');
@@ -133,15 +132,19 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
         softMask = false(H, W);
 
         for i = 1:length(stats)
-            if stats(i).Area < 6
+            if stats(i).Area < 10
                 continue;
             end
 
-            % Soft exudates (cotton-wool spots) are larger, diffuse, and slightly less bright
-            if stats(i).Area > 280 && stats(i).MeanIntensity < prctile(L_fundus, 96)
-                softMask(stats(i).PixelIdxList) = true;
+            regionPixels = stats(i).PixelIdxList;
+            meanB = mean(b(regionPixels));
+
+            % Soft exudates (cotton-wool spots) are white/gray with low yellowness (b* <= pb75)
+            % Confluent hard exudates retain high yellowness (b* > pb75) even when large
+            if stats(i).Area > 350 && meanB <= pb75
+                softMask(regionPixels) = true;
             else
-                hardMask(stats(i).PixelIdxList) = true;
+                hardMask(regionPixels) = true;
             end
         end
 

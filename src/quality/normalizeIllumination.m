@@ -45,61 +45,35 @@ function corrected = normalizeIllumination(img, sigma)
     sigma = max(sigma, 31);
 
     % Convert to double
-    imgD = im2double(img);
+    % Convert to L*a*b* color space for illumination normalization (preserves color ratios)
+    labImg = rgb2lab(img);
+    L = labImg(:,:,1);
+    a = labImg(:,:,2);
+    b = labImg(:,:,3);
 
-    % --- Method: Per-channel Gaussian background subtraction ---
-    % This is more robust than L*a*b* for severely uneven illumination
-
-    correctedD = zeros(size(imgD), 'like', imgD);
-
-    for ch = 1:3
-        channel = imgD(:,:,ch);
-
-        % Estimate background illumination with large Gaussian
-        background = imgaussfilt(channel, sigma);
-
-        % Subtract background and add mean back
-        channelMean = mean(channel(:));
-        normalized = channel - background + channelMean;
-
-        % Clip to valid range
-        correctedD(:,:,ch) = max(0, min(1, normalized));
-    end
-
-    % --- Adaptive rescaling ---
-    % Stretch each channel to use full dynamic range within the fundus mask
-    grayImg = rgb2gray(im2uint8(correctedD));
-    fundMask = grayImg > 10;
+    % Segment circular fundus foreground
+    grayImg = rgb2gray(img);
+    fundMask = grayImg > 15;
     if exist('imfill', 'file') == 2
         try, fundMask = imfill(fundMask, 'holes'); catch, end
     end
-    if exist('strel', 'file') == 2 && exist('imclose', 'file') == 2
-        try
-            se = strel('disk', 15);
-            fundMask = imclose(fundMask, se);
-        catch
-        end
+    if exist('strel', 'file') == 2 && exist('imerode', 'file') == 2
+        try, fundMask = imerode(fundMask, strel('disk', 8)); catch, end
     end
 
-    for ch = 1:3
-        channel = correctedD(:,:,ch);
-        maskedValues = channel(fundMask);
+    % Estimate background illumination on L* channel
+    backgroundL = imgaussfilt(L, sigma);
 
-        if ~isempty(maskedValues)
-            lo = prctile(maskedValues, 1);
-            hi = prctile(maskedValues, 99);
-
-            if hi > lo
-                channel = (channel - lo) / (hi - lo);
-                channel = max(0, min(1, channel));
-            end
-        end
-
-        correctedD(:,:,ch) = channel;
+    % Normalize L* within fundus mask
+    if any(fundMask(:))
+        targetMean = mean(L(fundMask));
+        L_norm = L - backgroundL + targetMean;
+        L_norm = max(0, min(100, L_norm));
+        L(fundMask) = L_norm(fundMask);
     end
 
-    % Convert back to uint8
-    corrected = im2uint8(correctedD);
+    labImg(:,:,1) = L;
+    corrected = lab2rgb(labImg, 'OutputType', 'uint8');
 
     % --- Validation: check that illumination is more uniform ---
     % Compare quadrant mean luminance std before and after
