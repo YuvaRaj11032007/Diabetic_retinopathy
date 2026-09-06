@@ -25,9 +25,47 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
     
     output = struct();
     tTotal = tic;
+    N = size(fusedFeatures, 1);
     
-    trainIdx = splits.train;
-    valIdx = splits.val;
+    % Resolve trainIdx and valIdx (handles string IDs, logical masks, or indices)
+    trainIdx = [];
+    valIdx   = [];
+    
+    if isfield(splits, 'train')
+        sTrain = splits.train;
+        sVal   = splits.val;
+        
+        if isstring(sTrain) || iscellstr(sTrain) || iscell(sTrain)
+            % String IDs: map to rows in master manifest
+            manifest = [];
+            try
+                manifest = readtable(fullfile('data', 'manifests', 'master_manifest_validated.csv'), 'TextType', 'string');
+            catch
+            end
+            
+            if ~isempty(manifest) && height(manifest) == N && ismember('image_id', manifest.Properties.VariableNames)
+                allIds = string(manifest.image_id);
+                trainIdx = ismember(allIds, string(sTrain));
+                valIdx   = ismember(allIds, string(sVal));
+            else
+                % Default 80-20 partition
+                rng(42);
+                perm = randperm(N);
+                nTr = round(0.8 * N);
+                trainIdx = false(N, 1); trainIdx(perm(1:nTr)) = true;
+                valIdx   = false(N, 1); valIdx(perm(nTr+1:end)) = true;
+            end
+        else
+            trainIdx = sTrain;
+            valIdx   = sVal;
+        end
+    else
+        rng(42);
+        perm = randperm(N);
+        nTr = round(0.8 * N);
+        trainIdx = false(N, 1); trainIdx(perm(1:nTr)) = true;
+        valIdx   = false(N, 1); valIdx(perm(nTr+1:end)) = true;
+    end
     
     XTrain = fusedFeatures(trainIdx, :);
     YTrainMulticlass = labels(trainIdx);
@@ -122,7 +160,11 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
     output.trainingLog.timestamp = datetime('now');
     output.trainingLog.options = options;
     
-    outDir = fullfile('d:\sih_project', 'models', 'grading');
+    projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
+    if isempty(projectRoot) || ~exist(projectRoot, 'dir')
+        projectRoot = fileparts(fileparts(fileparts(mfilename('fullpath'))));
+    end
+    outDir = fullfile(projectRoot, 'models', 'grading');
     if ~exist(outDir, 'dir')
         mkdir(outDir);
     end
@@ -138,7 +180,7 @@ function output = trainDRClassifier(fusedFeatures, labels, splits, options)
     end
     
     % Optional: Plots & Confusion matrices can be saved here to results/grading
-    resDir = fullfile('d:\sih_project', 'results', 'grading');
+    resDir = fullfile(projectRoot, 'results', 'grading');
     if ~exist(resDir, 'dir')
         mkdir(resDir);
     end

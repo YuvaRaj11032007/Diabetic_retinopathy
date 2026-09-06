@@ -25,7 +25,11 @@ function evalMetrics = evaluateDRClassifier(trainedModels, testFeatures, testLab
     
     evalMetrics = struct();
     
-    resDir = fullfile('d:\sih_project', 'results', 'grading');
+    projectRoot = getappdata(0, 'DRPipeline_ProjectRoot');
+    if isempty(projectRoot) || ~exist(projectRoot, 'dir')
+        projectRoot = fileparts(fileparts(fileparts(mfilename('fullpath'))));
+    end
+    resDir = fullfile(projectRoot, 'results', 'grading');
     if ~exist(resDir, 'dir')
         mkdir(resDir);
     end
