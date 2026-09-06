@@ -1,14 +1,16 @@
-function exudateResult = segmentExudates(img, odMask, vesselMask)
-%SEGMENTEXUDATES Segment hard and soft exudates in retinal images
+function exudateResult = segmentExudates(img, odMask, vesselMask, options)
+%SEGMENTEXUDATES Segment hard and soft exudates in retinal fundus images.
 %
 %   exudateResult = segmentExudates(img, odMask, vesselMask) segments
-%   bright lesions (hard exudates and cotton-wool spots) using L*a*b*
-%   color space thresholding and morphological operations.
+%   bright lesions (hard exudates and cotton-wool spots) using dual-channel
+%   morphological top-hat filtering and L*a*b* color thresholding.
 %
 %   INPUTS:
 %       img        - Enhanced RGB retinal image (HxWx3 uint8 or double)
-%       odMask     - Binary mask of optic disc (HxW logical)
-%       vesselMask - Binary mask of retinal vessels (HxW logical)
+%       odMask     - Binary mask of optic disc (HxW logical, optional)
+%       vesselMask - Binary mask of retinal vessels (HxW logical, optional)
+%       options    - Optional struct or Name-Value pairs:
+%                    .model - Pretrained model struct (optional)
 %
 %   OUTPUTS:
 %       exudateResult - Struct with fields:
@@ -26,6 +28,7 @@ function exudateResult = segmentExudates(img, odMask, vesselMask)
         img (:,:,3) {mustBeNumeric}
         odMask = []
         vesselMask = []
+        options.model = []
     end
 
     try
@@ -35,87 +38,106 @@ function exudateResult = segmentExudates(img, odMask, vesselMask)
             imgDouble = img;
         end
         [H, W, ~] = size(imgDouble);
+
         if isempty(odMask) || ~islogical(odMask) || ~isequal(size(odMask), [H, W])
             odMask = false(H, W);
         end
         if isempty(vesselMask) || ~islogical(vesselMask) || ~isequal(size(vesselMask), [H, W])
             vesselMask = false(H, W);
         end
-        
-        % Generate fundus mask (simple threshold to exclude dark background)
+
+        % 1. Robust fundus mask
         grayImg = rgb2gray(imgDouble);
-        fundusMask = grayImg > 0.05;
-        
-        % 1. Convert to L*a*b* color space
+        fundusMask = grayImg > 0.04;
+        fundusMask = imfill(fundusMask, 'holes');
+        fundusMask = imerode(fundusMask, strel('disk', 4));
+
+        % 2. Multi-channel representation (Green & L*a*b*)
+        G = imgDouble(:, :, 2);
         labImg = rgb2lab(imgDouble);
-        L = labImg(:,:,1);
-        b = labImg(:,:,3);
-        
-        % 2. Thresholding
-        % Extract values only within the fundus
+        L = labImg(:, :, 1);
+        b = labImg(:, :, 3);
+
         L_fundus = L(fundusMask);
         b_fundus = b(fundusMask);
-        
+
         if isempty(L_fundus)
             error('DRPipeline:segmentation:InvalidFundusMask', 'No valid fundus area detected.');
         end
-        
-        L_thresh = prctile(L_fundus, 90); % Top 10% brightest pixels
-        b_thresh = prctile(b_fundus, 80); % High yellow component
-        
-        brightMask = (L > L_thresh) & fundusMask;
-        yellowMask = (b > b_thresh) & fundusMask;
-        
-        % Combine masks
-        candidateMask = brightMask & yellowMask;
-        
-        % 3. Morphological reconstruction to get full exudate bodies
-        markerMask = imerode(candidateMask, strel('disk', 1));
-        reconstructedMask = imreconstruct(markerMask, candidateMask);
-        
-        % 4. Exclude OD region (dilate OD mask by 1.5x radius)
+
+        % 3. Morphological Top-Hat filter for local contrast isolation
+        tophatG = imtophat(G, strel('disk', 12));
+        tophatL = imtophat(L / 100, strel('disk', 12));
+        contrastBright = max(tophatG, tophatL);
+
+        contrastMask = (contrastBright > 0.035) & fundusMask;
+
+        % 4. Color & Brightness thresholding
+        pL70 = prctile(L_fundus, 70);
+        pL85 = prctile(L_fundus, 85);
+        pb55 = prctile(b_fundus, 55);
+
+        brightL = (L > pL70) & fundusMask;
+        yellowB = (b > pb55) & fundusMask;
+
+        % Candidates must have high local contrast OR high yellow-brightness
+        candidateMask = ((contrastMask & brightL) | (brightL & yellowB & (L > pL85))) & fundusMask;
+
+        % 5. Optic Disc Exclusion
         odStats = regionprops(odMask, 'EquivDiameter');
         if ~isempty(odStats)
-            odRadius = max([odStats.EquivDiameter]) / 2;
-            seOD = strel('disk', round(odRadius * 1.5));
-            expandedOD = imdilate(odMask, seOD);
-            reconstructedMask(expandedOD) = false;
+            odDiam = max([odStats.EquivDiameter]);
+            odRadius = odDiam / 2;
+            seMargin = max(5, min(14, round(odRadius * 0.15)));
+            expandedOD = imdilate(odMask, strel('disk', seMargin));
+            candidateMask(expandedOD) = false;
         end
-        
-        % Remove vessels just in case
-        reconstructedMask(vesselMask) = false;
-        
-        % 5. Differentiate Hard and Soft Exudates by size and intensity
+
+        % 6. Vessel Exclusion
+        if any(vesselMask(:))
+            candidateMask(vesselMask) = false;
+        end
+
+        % 7. Remove tiny single-pixel noise
+        candidateMask = bwareaopen(candidateMask, 5);
+
+        % 8. Morphological reconstruction to restore full lesion borders
+        marker = imerode(candidateMask, strel('disk', 1));
+        if any(marker(:))
+            reconstructedMask = imreconstruct(marker, candidateMask);
+        else
+            reconstructedMask = candidateMask;
+        end
+
+        % 9. Differentiate Hard and Soft Exudates
         stats = regionprops(reconstructedMask, L, 'Area', 'MeanIntensity', 'PixelIdxList', 'BoundingBox');
-        
-        hardMask = false(size(reconstructedMask));
-        softMask = false(size(reconstructedMask));
-        
+
+        hardMask = false(H, W);
+        softMask = false(H, W);
+
         for i = 1:length(stats)
-            % Ignore very small artifacts
-            if stats(i).Area < 10
+            if stats(i).Area < 6
                 continue;
             end
-            
-            % Soft exudates (cotton-wool spots) tend to be larger and slightly less intense
-            if stats(i).Area > 300 && stats(i).MeanIntensity < prctile(L_fundus, 98)
+
+            % Soft exudates (cotton-wool spots) are larger, diffuse, and slightly less bright
+            if stats(i).Area > 280 && stats(i).MeanIntensity < prctile(L_fundus, 96)
                 softMask(stats(i).PixelIdxList) = true;
             else
                 hardMask(stats(i).PixelIdxList) = true;
             end
         end
-        
-        % Combine for output regions
+
         finalMask = hardMask | softMask;
         regions = regionprops(finalMask, 'Area', 'Centroid', 'BoundingBox');
-        
+
         exudateResult = struct();
         exudateResult.hardExudateMask = hardMask;
         exudateResult.softExudateMask = softMask;
         exudateResult.totalArea = sum(finalMask, 'all');
         exudateResult.count = length(regions);
         exudateResult.regions = regions;
-        
+
     catch ME
         error('DRPipeline:segmentation:ExudateSegmentationError', ...
             'Failed to segment exudates: %s', ME.message);

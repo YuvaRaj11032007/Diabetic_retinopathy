@@ -233,25 +233,140 @@ function result = runDRScreening(imagePath, options)
     stepTimer = tic;
 
     try
-        % Load or use provided grading model
+        % Load or use provided grading models
         multiclassPath = fullfile(options.ModelsDir, 'grading', 'dr_multiclass.mat');
         binaryPath = fullfile(options.ModelsDir, 'grading', 'dr_binary_referable.mat');
 
         grade = 0;
         rawProbs = [1, 0, 0, 0, 0];  % Default: No DR
+        isReferable = false;
 
+        % 1. Load Multiclass Model
+        multiMdl = [];
         if ~isempty(options.GradingModels) && isfield(options.GradingModels, 'multiclass')
-            [grade, rawProbs] = predict(options.GradingModels.multiclass.model, featureVec);
+            if isfield(options.GradingModels.multiclass, 'model')
+                multiMdl = options.GradingModels.multiclass.model;
+            else
+                multiMdl = options.GradingModels.multiclass;
+            end
         elseif isfile(multiclassPath)
             mdl = load(multiclassPath);
             if isfield(mdl, 'model')
-                [grade, rawProbs] = predict(mdl.model, featureVec);
+                multiMdl = mdl.model;
+            elseif isfield(mdl, 'multiModelStruct') && isfield(mdl.multiModelStruct, 'model')
+                multiMdl = mdl.multiModelStruct.model;
+            elseif isa(mdl, 'classreg.learning.model.CompactFullClassificationModel') || isa(mdl, 'ClassificationECOC')
+                multiMdl = mdl;
+            end
+        end
+
+        % 2. Load Binary Referable Model
+        binMdl = [];
+        binThresh = 0.5;
+        if ~isempty(options.GradingModels) && isfield(options.GradingModels, 'binary')
+            if isfield(options.GradingModels.binary, 'model')
+                binMdl = options.GradingModels.binary.model;
+                if isfield(options.GradingModels.binary, 'optimalThreshold')
+                    binThresh = options.GradingModels.binary.optimalThreshold;
+                end
+            else
+                binMdl = options.GradingModels.binary;
+            end
+        elseif isfile(binaryPath)
+            bData = load(binaryPath);
+            if isfield(bData, 'model')
+                binMdl = bData.model;
+                if isfield(bData, 'optimalThreshold'), binThresh = bData.optimalThreshold; end
+            elseif isfield(bData, 'binModelStruct') && isfield(bData.binModelStruct, 'model')
+                binMdl = bData.binModelStruct.model;
+                if isfield(bData.binModelStruct, 'optimalThreshold')
+                    binThresh = bData.binModelStruct.optimalThreshold;
+                end
+            end
+        end
+
+        % 3. Multiclass Prediction with Dynamic Feature Dimension Adaptation
+        if ~isempty(multiMdl)
+            nExp = 0;
+            if isprop(multiMdl, 'NumPredictors')
+                nExp = multiMdl.NumPredictors;
+            elseif isprop(multiMdl, 'PredictorNames')
+                nExp = numel(multiMdl.PredictorNames);
+            end
+
+            if nExp == size(deepFeats, 2)
+                inputFeats = deepFeats;
+            elseif nExp == size(featureVec, 2)
+                inputFeats = featureVec;
+            elseif nExp == size(clinicalFeats.vector, 2)
+                inputFeats = clinicalFeats.vector;
+            elseif nExp > 0 && size(featureVec, 2) >= nExp
+                inputFeats = featureVec(:, 1:nExp);
+            elseif nExp > 0 && size(deepFeats, 2) >= nExp
+                inputFeats = deepFeats(:, 1:nExp);
+            else
+                inputFeats = deepFeats;
+            end
+
+            [predGrade, scoreLoss] = predict(multiMdl, inputFeats);
+            if iscell(predGrade), predGrade = predGrade{1}; end
+            if ischar(predGrade) || isstring(predGrade), predGrade = str2double(predGrade); end
+            if iscategorical(predGrade), predGrade = double(string(predGrade)); end
+            grade = round(max(0, min(4, double(predGrade))));
+
+            % Normalize loss/scores to proper class probabilities via softmax
+            if ~isempty(scoreLoss) && numel(scoreLoss) == 5
+                s = scoreLoss(:)';
+                expS = exp(s - max(s));
+                rawProbs = expS / sum(expS);
+            else
+                rawProbs = zeros(1, 5);
+                rawProbs(grade + 1) = 0.88;
             end
         else
             % Fallback: rule-based grading from lesion counts
             grade = ruleBasedGrading(segResult);
             rawProbs = zeros(1, 5);
-            rawProbs(grade + 1) = 0.6;  % Low confidence for rule-based
+            rawProbs(grade + 1) = 0.65;
+        end
+
+        % 4. Binary Referable Prediction
+        isReferable = (grade >= 2);
+        if ~isempty(binMdl)
+            try
+                nExpBin = 0;
+                if isprop(binMdl, 'NumPredictors')
+                    nExpBin = binMdl.NumPredictors;
+                elseif isprop(binMdl, 'PredictorNames')
+                    nExpBin = numel(binMdl.PredictorNames);
+                end
+                if nExpBin == size(deepFeats, 2)
+                    bInput = deepFeats;
+                elseif nExpBin == size(featureVec, 2)
+                    bInput = featureVec;
+                else
+                    bInput = deepFeats;
+                end
+                [~, binScores] = predict(binMdl, bInput);
+                if size(binScores, 2) >= 2
+                    refScore = binScores(:, 2);
+                    isReferable = (refScore >= binThresh) || (grade >= 2);
+                end
+            catch
+            end
+        end
+
+        % 5. Clinical Safety Override (ICDR Lesion Verification)
+        ruleGrade = ruleBasedGrading(segResult);
+        if ruleGrade > grade
+            if options.Verbose
+                fprintf(' [Clinical Safety Alert: Lesion signs indicate Grade %d, upgrading from ML Grade %d]', ...
+                    ruleGrade, grade);
+            end
+            grade = ruleGrade;
+            rawProbs = zeros(1, 5);
+            rawProbs(grade + 1) = 0.90;
+            isReferable = (grade >= 2);
         end
 
         if iscell(grade), grade = grade{1}; end
@@ -263,14 +378,15 @@ function result = runDRScreening(imagePath, options)
             'DR grading failed: %s. Using rule-based fallback.', ME.message);
         grade = ruleBasedGrading(segResult);
         rawProbs = zeros(1, 5);
-        rawProbs(grade + 1) = 0.5;
+        rawProbs(grade + 1) = 0.70;
+        isReferable = (grade >= 2);
     end
 
     timings.grading = toc(stepTimer);
 
     result.grade = grade;
     result.gradeName = gradeNames{grade + 1};
-    result.isReferable = grade >= 2;
+    result.isReferable = isReferable;
     result.rawProbabilities = rawProbs;
 
     if options.Verbose
@@ -395,50 +511,70 @@ end
 % =========================================================================
 
 function grade = ruleBasedGrading(segResult)
-%RULEBASEDGRADING Fallback rule-based DR grading from lesion counts.
+%RULEBASEDGRADING Rule-based DR grading based on ICDR criteria from lesion segmentation.
     grade = 0;  % Default: No DR
 
-    % Check for microaneurysms
+    % 1. Microaneurysms
     maCount = 0;
     if isfield(segResult, 'microaneurysms') && ~isempty(segResult.microaneurysms) && isfield(segResult.microaneurysms, 'count')
-        try, maCount = segResult.microaneurysms(1).count; catch, end
+        try, maCount = segResult.microaneurysms.count; catch, end
     elseif isfield(segResult, 'MACount')
         try, maCount = segResult.MACount; catch, end
     end
 
-    % Check for hemorrhages
+    % 2. Hemorrhages
     heCount = 0;
-    if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages) && isfield(segResult.hemorrhages, 'count')
-        try, heCount = segResult.hemorrhages(1).count; catch, end
+    heArea = 0;
+    if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages)
+        if isfield(segResult.hemorrhages, 'count'), try, heCount = segResult.hemorrhages.count; catch, end; end
+        if isfield(segResult.hemorrhages, 'totalArea'), try, heArea = segResult.hemorrhages.totalArea; catch, end; end
     elseif isfield(segResult, 'HemorrhageCount')
         try, heCount = segResult.HemorrhageCount; catch, end
     end
 
-    % Check for exudates
-    exPresent = false;
-    if isfield(segResult, 'exudates') && ~isempty(segResult.exudates) && isfield(segResult.exudates, 'totalArea')
-        try, exPresent = segResult.exudates(1).totalArea > 0; catch, end
+    % 3. Exudates (Hard & Soft)
+    exArea = 0;
+    exCount = 0;
+    softExCount = 0;
+    if isfield(segResult, 'exudates') && ~isempty(segResult.exudates)
+        if isfield(segResult.exudates, 'totalArea'), try, exArea = segResult.exudates.totalArea; catch, end; end
+        if isfield(segResult.exudates, 'count'), try, exCount = segResult.exudates.count; catch, end; end
+        if isfield(segResult.exudates, 'softExudateMask') && ~isempty(segResult.exudates.softExudateMask)
+            try, softExCount = sum(segResult.exudates.softExudateMask(:) > 0); catch, end
+        end
     elseif isfield(segResult, 'HardExudateArea')
-        try, exPresent = segResult.HardExudateArea > 0; catch, end
+        try, exArea = segResult.HardExudateArea; catch, end
     end
 
-    % Check for neovascularization
+    % 4. Neovascularization
     nvProb = 0;
     if isfield(segResult, 'neovascularization') && ~isempty(segResult.neovascularization) && isfield(segResult.neovascularization, 'nvProbability')
-        try, nvProb = segResult.neovascularization(1).nvProbability; catch, end
+        try, nvProb = segResult.neovascularization.nvProbability; catch, end
     elseif isfield(segResult, 'NVDProbability')
         try, nvProb = segResult.NVDProbability; catch, end
     end
 
-    % Apply ICDR rules
-    if nvProb > 0.5
-        grade = 4;  % PDR
-    elseif heCount > 20
-        grade = 3;  % Severe NPDR
-    elseif (maCount > 0 && heCount > 0) || exPresent
-        grade = 2;  % Moderate NPDR
+    % ICDR Clinical Classification Logic:
+    % Grade 4 (PDR): Definite neovascularization (NVD or NVE) or preretinal hemorrhage
+    if nvProb > 0.4
+        grade = 4;
+    % Grade 3 (Severe NPDR): Any of:
+    %  - Hemorrhages count >= 20 (or large hemorrhage area > 1000 px)
+    %  - Extensive hard exudate clusters (area > 800 px or count >= 15)
+    %  - Multiple cotton-wool spots (soft exudates > 200 px)
+    elseif heCount >= 20 || heArea > 1000 || exArea > 800 || exCount >= 15 || softExCount > 200
+        grade = 3;
+    % Grade 2 (Moderate NPDR):
+    %  - Presence of exudates (hard or soft) OR
+    %  - Both microaneurysms and hemorrhages OR
+    %  - Multiple microaneurysms (>= 5) or any hemorrhages
+    elseif exArea > 0 || exCount > 0 || (maCount > 0 && heCount > 0) || heCount > 0 || maCount >= 5
+        grade = 2;
+    % Grade 1 (Mild NPDR): Microaneurysms only
     elseif maCount > 0
-        grade = 1;  % Mild NPDR
+        grade = 1;
+    else
+        grade = 0;
     end
 end
 

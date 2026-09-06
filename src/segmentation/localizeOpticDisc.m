@@ -31,13 +31,22 @@ function odResult = localizeOpticDisc(imgRGB, options)
     arguments
         imgRGB (:,:,3) uint8
         options.ModelPath (1,:) char = ''
+        options.model = []
     end
 
     [H, W, ~] = size(imgRGB);
     
-    if ~isempty(options.ModelPath)
+    if ~isempty(options.model) && ischar(options.model)
+        options.ModelPath = options.model;
+    end
+    
+    if ~isempty(options.ModelPath) || (~isempty(options.model) && isstruct(options.model))
         try
-            loadedData = load(options.ModelPath);
+            if isstruct(options.model)
+                loadedData = options.model;
+            else
+                loadedData = load(options.ModelPath);
+            end
             if isfield(loadedData, 'net')
                 net = loadedData.net;
             else
