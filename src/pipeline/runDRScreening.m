@@ -356,60 +356,11 @@ function result = runDRScreening(imagePath, options)
             end
         end
 
-        % 5. Clinical Safety Override (ICDR Lesion Verification)
-        % The deep learning model is the primary diagnostic classifier.
-        % A safety override is only applied when unequivocal, massive lesion clusters
-        % are physically detected by segmentation that contradict a false-negative low grade.
-        ruleGrade = ruleBasedGrading(segResult);
-
-        if ~isempty(multiMdl)
-            % Extract lesion counts for confirmed safety check
-            exArea = 0; exCount = 0; heCount = 0; heArea = 0; nvProb = 0; maCount = 0;
-            if isfield(segResult, 'exudates') && ~isempty(segResult.exudates)
-                if isfield(segResult.exudates, 'totalArea'), try, exArea = segResult.exudates.totalArea; catch, end; end
-                if isfield(segResult.exudates, 'count'), try, exCount = segResult.exudates.count; catch, end; end
-            end
-            if isfield(segResult, 'hemorrhages') && ~isempty(segResult.hemorrhages)
-                if isfield(segResult.hemorrhages, 'count'), try, heCount = segResult.hemorrhages.count; catch, end; end
-                if isfield(segResult.hemorrhages, 'totalArea'), try, heArea = segResult.hemorrhages.totalArea; catch, end; end
-            end
-            if isfield(segResult, 'neovascularization') && ~isempty(segResult.neovascularization)
-                if isfield(segResult.neovascularization, 'nvProbability'), try, nvProb = segResult.neovascularization.nvProbability; catch, end; end
-            end
-            if isfield(segResult, 'microaneurysms') && ~isempty(segResult.microaneurysms)
-                if isfield(segResult.microaneurysms, 'count'), try, maCount = segResult.microaneurysms.count; catch, end; end
-            end
-
-            hasSevereExudates = (exArea > 800 && exCount >= 8);
-            hasSevereHemorrhages = (heCount >= 20 || heArea > 1000);
-            hasDefinitePDR = (nvProb >= 0.7 && (maCount >= 3 || heCount >= 3));
-            hasModerateExudates = (exArea > 350 && exCount >= 5);
-
-            if grade < 3 && (hasSevereExudates || hasSevereHemorrhages)
-                if options.Verbose
-                    fprintf(' [Clinical Safety Alert: Massive lesion burden confirms Grade 3, upgrading from ML Grade %d]', grade);
-                end
-                grade = 3;
-                rawProbs = zeros(1, 5); rawProbs(grade + 1) = 0.90;
-                isReferable = true;
-            elseif grade < 2 && hasModerateExudates
-                if options.Verbose
-                    fprintf(' [Clinical Safety Alert: Substantial exudate clusters confirm Grade 2, upgrading from ML Grade %d]', grade);
-                end
-                grade = 2;
-                rawProbs = zeros(1, 5); rawProbs(grade + 1) = 0.85;
-                isReferable = true;
-            elseif grade < 4 && hasDefinitePDR
-                if options.Verbose
-                    fprintf(' [Clinical Safety Alert: Confirmed neovascular fronds indicate Grade 4, upgrading from ML Grade %d]', grade);
-                end
-                grade = 4;
-                rawProbs = zeros(1, 5); rawProbs(grade + 1) = 0.90;
-                isReferable = true;
-            end
-        else
-            % Fallback when no ML model is available: use rule-based directly
-            grade = ruleGrade;
+        % 5. Diagnostic Decision
+        % The fine-tuned deep learning model is the primary diagnostic classifier.
+        % Heuristic rule-based grading serves solely as a fallback if no trained model is loaded.
+        if isempty(multiMdl)
+            grade = ruleBasedGrading(segResult);
             rawProbs = zeros(1, 5);
             rawProbs(grade + 1) = 0.70;
             isReferable = (grade >= 2);

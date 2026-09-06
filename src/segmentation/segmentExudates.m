@@ -46,14 +46,16 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
             vesselMask = false(H, W);
         end
 
-        % 1. Robust fundus mask
+        % 1. Robust fundus mask (erode border to avoid camera glare/ring artifacts)
         grayImg = rgb2gray(imgDouble);
         fundusMask = grayImg > 0.04;
         fundusMask = imfill(fundusMask, 'holes');
-        fundusMask = imerode(fundusMask, strel('disk', 4));
+        fundusMask = imerode(fundusMask, strel('disk', 15));
 
-        % 2. Multi-channel representation (Green & L*a*b*)
+        % 2. Multi-channel representation (RGB & L*a*b*)
+        R = imgDouble(:, :, 1);
         G = imgDouble(:, :, 2);
+        B = imgDouble(:, :, 3);
         labImg = rgb2lab(imgDouble);
         L = labImg(:, :, 1);
         b = labImg(:, :, 3);
@@ -70,18 +72,22 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
         tophatL = imtophat(L / 100, strel('disk', 12));
         contrastBright = max(tophatG, tophatL);
 
-        contrastMask = (contrastBright > 0.035) & fundusMask;
+        % Real hard exudates have sharp local contrast (> 0.075), not subtle background texture
+        contrastMask = (contrastBright > 0.075) & fundusMask;
 
         % 4. Color & Brightness thresholding
-        pL70 = prctile(L_fundus, 70);
-        pL85 = prctile(L_fundus, 85);
-        pb55 = prctile(b_fundus, 55);
+        % Real exudates are among the brightest pixels with strong yellow component
+        pL92 = prctile(L_fundus, 92);
+        pb75 = prctile(b_fundus, 75);
 
-        brightL = (L > pL70) & fundusMask;
-        yellowB = (b > pb55) & fundusMask;
+        brightL = (L > pL92) & fundusMask;
+        yellowB = (b > pb75) & fundusMask;
 
-        % Candidates must have high local contrast OR high yellow-brightness
-        candidateMask = ((contrastMask & brightL) | (brightL & yellowB & (L > pL85))) & fundusMask;
+        % Color verification: exudates are yellow-white (high R and G, lower B)
+        isYellowish = (R > B + 0.08) & (G > B) & (R > 0.45);
+
+        % Candidates must have high local contrast AND high brightness AND yellow hue
+        candidateMask = contrastMask & brightL & yellowB & isYellowish & fundusMask;
 
         % 5. Optic Disc Exclusion
         odStats = regionprops(odMask, 'EquivDiameter');
@@ -98,8 +104,8 @@ function exudateResult = segmentExudates(img, odMask, vesselMask, options)
             candidateMask(vesselMask) = false;
         end
 
-        % 7. Remove tiny single-pixel noise
-        candidateMask = bwareaopen(candidateMask, 5);
+        % 7. Remove small noise (minimum 10 pixels for genuine exudates)
+        candidateMask = bwareaopen(candidateMask, 10);
 
         % 8. Morphological reconstruction to restore full lesion borders
         marker = imerode(candidateMask, strel('disk', 1));
